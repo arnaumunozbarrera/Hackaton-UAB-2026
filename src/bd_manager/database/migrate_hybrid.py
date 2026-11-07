@@ -61,6 +61,88 @@ def g(d, path):
     return d
 
 
+_DYNAMIC_LOG_VALUE = re.compile(
+    r"(?i)\b(?:[0-9a-f]{8}-[0-9a-f-]{27,}|\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?|\d{1,3}(?:\.\d{1,3}){3}|\d+)\b"
+)
+
+
+def normalize_log_text(value):
+    """Return a stable message template with volatile IDs, timestamps and numbers masked."""
+    if value is None:
+        return ""
+    text = str(value).strip().lower()
+    text = _DYNAMIC_LOG_VALUE.sub("<dynamic>", text)
+    return re.sub(r"\s+", " ", text)
+
+
+def log_fingerprint(source, action=None, result=None, detail=None):
+    """Build a reusable fingerprint without storing the complete log payload in the pattern catalog."""
+    material = "|".join(
+        (normalize_log_text(v) for v in (source, action, result, detail))
+    )
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
+def register_common_log_pattern(con, *, pattern_id, pattern_name, description, source_product=None,
+                               action=None, result=None, message_template=None,
+                               classification="candidate", filtering_action="retain",
+                               confidence=None, rationale=None, enabled=1):
+    """Register or update a reusable common/noise pattern; does not import or delete log data."""
+    fingerprint = log_fingerprint(source_product, action, result, message_template)
+    con.execute(
+        """INSERT INTO common_log_pattern
+        (pattern_id, pattern_name, description, source_product, action, result,
+         normalized_fingerprint, message_template, classification, filtering_action,
+         confidence, rationale, enabled, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(pattern_id) DO UPDATE SET
+          pattern_name=excluded.pattern_name, description=excluded.description,
+          source_product=excluded.source_product, action=excluded.action,
+          result=excluded.result, normalized_fingerprint=excluded.normalized_fingerprint,
+          message_template=excluded.message_template, classification=excluded.classification,
+          filtering_action=excluded.filtering_action, confidence=excluded.confidence,
+          rationale=excluded.rationale, enabled=excluded.enabled, updated_at=CURRENT_TIMESTAMP""",
+        (pattern_id, pattern_name, description, source_product, action, result,
+         fingerprint, message_template, classification, filtering_action,
+         confidence, rationale, enabled),
+    )
+
+
+def match_log_event(con, event_id):
+    """Match one already-loaded event against enabled patterns and record the decision."""
+    event = con.execute(
+        "SELECT event_id, fuente, accion, resultado, datos_json FROM evento WHERE event_id = ?",
+        (event_id,),
+    ).fetchone()
+    if event is None:
+        raise ValueError(f"event not found: {event_id}")
+    fingerprint = log_fingerprint(event[1], event[2], event[3], event[4])
+    patterns = con.execute(
+        """SELECT pattern_id, normalized_fingerprint, source_product, action, result
+           FROM common_log_pattern WHERE enabled = 1"""
+    )
+    matches = []
+    for pattern in patterns:
+        pattern_fields = (pattern[2], pattern[3], pattern[4])
+        has_fields = any(value is not None for value in pattern_fields)
+        same_fields = has_fields and all(
+            expected is None or normalize_log_text(expected) == normalize_log_text(actual)
+            for expected, actual in ((pattern[2], event[1]), (pattern[3], event[2]), (pattern[4], event[3]))
+        )
+        if pattern[1] == fingerprint or same_fields:
+            method = "fingerprint" if pattern[1] == fingerprint else "fields"
+            matches.append((event_id, pattern[0], method, 1.0 if method == "fingerprint" else 0.8))
+    con.executemany(
+        """INSERT INTO log_pattern_match(event_id, pattern_id, matched_by, match_confidence)
+           VALUES (?, ?, ?, ?)
+           ON CONFLICT(event_id, pattern_id) DO UPDATE SET
+             matched_by=excluded.matched_by, match_confidence=excluded.match_confidence,
+             matched_at=CURRENT_TIMESTAMP""",
+        matches,
+    )
+    return len(matches)
+
+
 DDL = r"""
 -- ===================== INVENTARIO Y NEGOCIO =====================
 CREATE TABLE zona_red (zona TEXT PRIMARY KEY, cidr TEXT, ubicacion TEXT, descripcion TEXT);
@@ -137,6 +219,31 @@ CREATE TABLE evento (
   user_key TEXT, customer_id TEXT, hostname TEXT, sha256 TEXT, ref_id TEXT,          -- resolved shortcuts (full detail in participacion)
   archivo_id INTEGER REFERENCES archivo_fuente(archivo_id), linea INTEGER,
   datos_json TEXT NOT NULL);     -- every field of the original record
+CREATE TABLE common_log_pattern (
+  pattern_id TEXT PRIMARY KEY,
+  pattern_name TEXT NOT NULL UNIQUE,
+  description TEXT NOT NULL,
+  source_product TEXT,
+  action TEXT,
+  result TEXT,
+  normalized_fingerprint TEXT,
+  message_template TEXT,
+  classification TEXT NOT NULL CHECK (classification IN ('noise', 'benign_expected', 'common_cross_product', 'candidate')),
+  filtering_action TEXT NOT NULL DEFAULT 'retain' CHECK (filtering_action IN ('retain', 'aggregate', 'hide_from_triage')),
+  confidence REAL CHECK (confidence BETWEEN 0 AND 1),
+  rationale TEXT,
+  enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE log_pattern_match (
+  event_id TEXT NOT NULL REFERENCES evento(event_id),
+  pattern_id TEXT NOT NULL REFERENCES common_log_pattern(pattern_id),
+  matched_by TEXT NOT NULL,              -- fingerprint | fields | analyst
+  match_confidence REAL CHECK (match_confidence BETWEEN 0 AND 1),
+  matched_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (event_id, pattern_id)
+);
 CREATE TABLE indicador (
   indicador_id INTEGER PRIMARY KEY, tipo TEXT NOT NULL, valor TEXT NOT NULL, normalizado TEXT,
   UNIQUE (tipo, valor));
@@ -1036,6 +1143,28 @@ CREATE VIEW bridge_alert_entity AS
   ORDER BY alert_id, orden;   -- original order of the entities inside the alert JSON (deterministic re-runs)
 CREATE VIEW bridge_alert_event AS
   SELECT ae.alert_id, ae.event_id, 1 AS in_dim_log FROM alerta_evento ae;
+CREATE VIEW v_common_log_matches AS
+  SELECT e.event_id, e.fuente AS source_product, e.timestamp, e.accion AS action, e.resultado AS result,
+         p.pattern_id, p.pattern_name, p.classification, p.filtering_action,
+         m.matched_by, m.match_confidence
+  FROM evento e
+  JOIN log_pattern_match m ON m.event_id = e.event_id
+  JOIN common_log_pattern p ON p.pattern_id = m.pattern_id;
+CREATE VIEW v_useful_logs AS
+  SELECT e.*
+  FROM evento e
+  WHERE NOT EXISTS (
+    SELECT 1
+    FROM log_pattern_match m
+    JOIN common_log_pattern p ON p.pattern_id = m.pattern_id
+    WHERE m.event_id = e.event_id AND p.enabled = 1 AND p.filtering_action = 'hide_from_triage'
+  );
+CREATE VIEW v_common_log_candidates AS
+  SELECT accion AS action, resultado AS result, COUNT(*) AS event_count,
+         COUNT(DISTINCT fuente) AS product_count, COUNT(DISTINCT event_id) AS distinct_event_count
+  FROM evento
+  GROUP BY accion, resultado
+  HAVING COUNT(DISTINCT fuente) > 1;
 """
 
 INDEXES = r"""
@@ -1047,6 +1176,10 @@ CREATE INDEX ix_evento_sha       ON evento(sha256);
 CREATE INDEX ix_evento_ref       ON evento(ref_id);
 CREATE INDEX ix_evento_cust_ts   ON evento(customer_id, timestamp);
 CREATE INDEX ix_evento_fuente_ts ON evento(fuente, timestamp);
+CREATE INDEX ix_common_pattern_fingerprint ON common_log_pattern(normalized_fingerprint);
+CREATE INDEX ix_common_pattern_source_action ON common_log_pattern(source_product, action, result);
+CREATE INDEX ix_log_pattern_match_pattern ON log_pattern_match(pattern_id);
+CREATE INDEX ix_log_pattern_match_event ON log_pattern_match(event_id);
 CREATE INDEX ix_alerta_fecha     ON alerta(fecha);
 CREATE INDEX ix_alerta_rule      ON alerta(rule_id);
 CREATE INDEX ix_ae_event         ON alerta_evento(event_id);

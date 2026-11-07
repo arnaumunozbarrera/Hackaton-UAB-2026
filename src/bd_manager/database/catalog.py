@@ -33,6 +33,10 @@ LAYER = {
         "bridge_alert_incident",
         "fact_attack_step",
     ],
+    "System layer - log filtering catalog": [
+        "common_log_pattern",
+        "log_pattern_match",
+    ],
     "Reference layer": ["dim_mitre", "ref_severity_matrix"],
 }
 DESC = {
@@ -61,6 +65,8 @@ DESC = {
     "fact_incident": "System output: incidents (L2 grouping) and investigation report fields (L3).",
     "bridge_alert_incident": "System output: alert -> incident link with reason and score (L2).",
     "fact_attack_step": "System output: reconstructed attack timeline (L3), evidence origin alert / hidden_log / context.",
+    "common_log_pattern": "Reusable catalog of normalized cross-product, benign-expected and noise log patterns. Empty until reviewed patterns are added.",
+    "log_pattern_match": "Event-to-pattern decisions used to hide or aggregate non-useful logs without deleting raw evidence.",
     "dim_mitre": "MITRE ATT&CK Enterprise (+ ICS / ATLAS ids used by the dataset): tactic, kill-chain order, data sources, mitigations.",
     "ref_severity_matrix": "Severity matrix of politica_soc.md section 2.",
 }
@@ -78,6 +84,9 @@ VIEWS = {
     "v_alert_duplicates": "Groups of identical alerts (rule + entities + day).",
     "v_incident_queue": "Analyst queue ordered by status, severity, SLA.",
     "v_incident_timeline": "L3 timeline with MITRE tactic and kill-chain order.",
+    "v_common_log_matches": "Events matched to reusable common/noise patterns.",
+    "v_useful_logs": "Raw events excluding enabled patterns marked hide_from_triage; raw data remains in evento.",
+    "v_common_log_candidates": "Action/result candidates observed across multiple products for analyst review.",
 }
 
 

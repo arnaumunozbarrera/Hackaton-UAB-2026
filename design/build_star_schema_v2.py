@@ -156,6 +156,29 @@ T = {
             ("detail", "J", "raw record (untrusted)"),
         ],
     ),
+    "common_log_pattern": (
+        "reviewed common / benign / noise patterns",
+        "#a04000",
+        [
+            ("pattern_id", "PK", "stable catalog id"),
+            ("pattern_name", "A", "human-readable"),
+            ("source_product / action / result", "A", "CSV-aligned filters"),
+            ("normalized_fingerprint", "N", "volatile values masked"),
+            ("classification", "M", "noise / benign / common"),
+            ("filtering_action", "M", "retain / aggregate / hide"),
+            ("confidence / rationale", "M", "analyst review"),
+            ("enabled", "M", "safe rollout switch"),
+        ],
+    ),
+    "log_pattern_match": (
+        "event classification; raw events are retained",
+        "#a04000",
+        [
+            ("event_id / pattern_id", "PK", "event ↔ reusable pattern"),
+            ("matched_by", "A", "fingerprint / fields / analyst"),
+            ("match_confidence", "M", "0–1"),
+        ],
+    ),
 }
 TAG = {
     "PK": ("#fff2cc", "PK"),
@@ -199,6 +222,8 @@ POS = {
     "dim_log": (-13, -8.6),
     "dim_mitre": (-4.3, -8.6),
     "fact_attack_step": (5.4, -8.9),
+    "common_log_pattern": (4.6, -8.7),
+    "log_pattern_match": (9.8, -8.7),
     "legend": (14.2, 9.0),
 }
 g = [
@@ -236,6 +261,9 @@ E("fact_incident", None, "s", "fact_attack_step", "incident_id", "e", L3, "incid
 E("fact_attack_step", "technique_id", "w", "dim_mitre", "technique_id", "e", MIT, "technique_id (N:1)")
 E("fact_attack_step", "event_id", "w", "dim_log", None, "s", "#3b6fb6", "event_id (N:1)", "dashed")
 E("fact_alert", "action", "e", "fact_attack_step", None, "n", L1, "alert_id (0..1)", "dashed")
+# Common/noise log filtering keeps raw evidence and only changes triage visibility.
+E("dim_log", None, "e", "log_pattern_match", "event_id / pattern_id", "w", "#a04000", "event classification", "dashed")
+E("common_log_pattern", "pattern_id", "e", "log_pattern_match", "event_id / pattern_id", "w", "#a04000", "reusable pattern", "dashed")
 
 g.append(
     'legend [pos="14.2,9.0!", label=<<TABLE BORDER="1" CELLBORDER="0" CELLSPACING="2" CELLPADDING="3" BGCOLOR="#fafafa">'

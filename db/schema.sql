@@ -67,6 +67,31 @@ CREATE TABLE evento (
   archivo_id INTEGER REFERENCES archivo_fuente(archivo_id), linea INTEGER,
   datos_json TEXT NOT NULL);
 
+CREATE TABLE common_log_pattern (
+  pattern_id TEXT PRIMARY KEY,
+  pattern_name TEXT NOT NULL UNIQUE,
+  description TEXT NOT NULL,
+  source_product TEXT,
+  action TEXT,
+  result TEXT,
+  normalized_fingerprint TEXT,
+  message_template TEXT,
+  classification TEXT NOT NULL CHECK (classification IN ('noise', 'benign_expected', 'common_cross_product', 'candidate')),
+  filtering_action TEXT NOT NULL DEFAULT 'retain' CHECK (filtering_action IN ('retain', 'aggregate', 'hide_from_triage')),
+  confidence REAL CHECK (confidence BETWEEN 0 AND 1),
+  rationale TEXT,
+  enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+
+CREATE TABLE log_pattern_match (
+  event_id TEXT NOT NULL REFERENCES evento(event_id),
+  pattern_id TEXT NOT NULL REFERENCES common_log_pattern(pattern_id),
+  matched_by TEXT NOT NULL,
+  match_confidence REAL CHECK (match_confidence BETWEEN 0 AND 1),
+  matched_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (event_id, pattern_id));
+
 CREATE TABLE evento_rrhh (
   rrhh_id INTEGER PRIMARY KEY, user_id TEXT REFERENCES usuario(user_id), usuario TEXT,
   fecha TEXT, tipo TEXT, detalle TEXT, fecha_efectiva TEXT,
@@ -177,6 +202,10 @@ CREATE INDEX ix_evento_cust_ts   ON evento(customer_id, timestamp);
 CREATE INDEX ix_evento_dst       ON evento(destino);
 
 CREATE INDEX ix_evento_fuente_ts ON evento(fuente, timestamp);
+CREATE INDEX ix_common_pattern_fingerprint ON common_log_pattern(normalized_fingerprint);
+CREATE INDEX ix_common_pattern_source_action ON common_log_pattern(source_product, action, result);
+CREATE INDEX ix_log_pattern_match_pattern ON log_pattern_match(pattern_id);
+CREATE INDEX ix_log_pattern_match_event ON log_pattern_match(event_id);
 
 CREATE INDEX ix_evento_host_ts   ON evento(hostname, timestamp);
 
@@ -247,6 +276,31 @@ CREATE VIEW bridge_alert_entity AS
 
 CREATE VIEW bridge_alert_event AS
   SELECT ae.alert_id, ae.event_id, 1 AS in_dim_log FROM alerta_evento ae;
+
+CREATE VIEW v_common_log_matches AS
+  SELECT e.event_id, e.fuente AS source_product, e.timestamp, e.accion AS action, e.resultado AS result,
+         p.pattern_id, p.pattern_name, p.classification, p.filtering_action,
+         m.matched_by, m.match_confidence
+  FROM evento e
+  JOIN log_pattern_match m ON m.event_id = e.event_id
+  JOIN common_log_pattern p ON p.pattern_id = m.pattern_id;
+
+CREATE VIEW v_useful_logs AS
+  SELECT e.*
+  FROM evento e
+  WHERE NOT EXISTS (
+    SELECT 1
+    FROM log_pattern_match m
+    JOIN common_log_pattern p ON p.pattern_id = m.pattern_id
+    WHERE m.event_id = e.event_id AND p.enabled = 1 AND p.filtering_action = 'hide_from_triage'
+  );
+
+CREATE VIEW v_common_log_candidates AS
+  SELECT accion AS action, resultado AS result, COUNT(*) AS event_count,
+         COUNT(DISTINCT fuente) AS product_count, COUNT(DISTINCT event_id) AS distinct_event_count
+  FROM evento
+  GROUP BY accion, resultado
+  HAVING COUNT(DISTINCT fuente) > 1;
 
 CREATE VIEW dim_context AS
   SELECT i.valor AS context_key, i.tipo AS context_type, t.reputacion AS reputation, t.confianza AS confidence,
