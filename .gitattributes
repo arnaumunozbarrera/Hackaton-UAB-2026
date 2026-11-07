@@ -1,0 +1,18 @@
+# Normalise line endings: LF in the repository, native checkout
+* text=auto eol=lf
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+
+# Binary files
+*.sqlite binary
+*.db binary
+*.png binary
+*.jpg binary
+*.pptx binary
+*.xlsx binary
+*.zip binary
+
+# Large delivered dataset: no textual diffs (keeps reviews and PRs readable)
+docs/03_alertas/*.jsonl -diff linguist-generated
+docs/04_logs/* -diff linguist-generated
+docs/05_inteligencia/geoip_asn.csv -diff linguist-generated

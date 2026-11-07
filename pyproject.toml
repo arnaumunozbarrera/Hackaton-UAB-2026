@@ -1,0 +1,47 @@
+[project]
+name = "tarvia-soc-triage"
+version = "0.1.0"
+description = "AI-assisted L1 triage for the Tarvia SOC (Hackathon UAB 2026 - Deloitte Cyber AI challenge)"
+readme = "README.md"
+requires-python = ">=3.10"
+
+# ---------------------------------------------------------------- Ruff (lint + format)
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+extend-exclude = ["docs"]           # delivered dataset and tools: never modified
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+
+[tool.ruff.lint]
+select = [
+  "E", "W",   # pycodestyle
+  "F",        # pyflakes
+  "I",        # import order
+  "B",        # bugbear
+  "UP",       # pyupgrade
+  "S608",     # SQL built from strings: review (use parameters)
+]
+ignore = [
+  "E501",     # line length handled by the formatter
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Data-layer scripts written before these rules: compact one-liners accepted until refactored.
+# New modules must not be added here.
+"db/*.py" = ["E701", "E702", "E731", "E741", "E743", "B007", "B023", "B904", "S608", "UP015", "UP028", "UP038"]
+"design/*.py" = ["E701", "E702", "B007", "UP031"]   # one-off diagram generators
+"tests/*.py" = ["S101"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["db"]
+
+# ---------------------------------------------------------------- Pytest
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"
+markers = ["db: needs the built database (skipped when db/tarvia_soc.sqlite is missing)"]

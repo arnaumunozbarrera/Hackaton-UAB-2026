@@ -1,0 +1,5 @@
+# Runtime dependencies (the db/ scripts only use the standard library + tzdata)
+tzdata>=2024.1          # IANA time zones for zoneinfo (required on Windows)
+fastapi>=0.110          # mock SOC API (docs/06_herramientas/mock_soc_api.py)
+uvicorn>=0.29
+requests>=2.31

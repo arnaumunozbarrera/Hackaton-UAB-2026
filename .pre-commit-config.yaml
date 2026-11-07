@@ -1,0 +1,31 @@
+# Install once per clone:  pre-commit install
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.9
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: check-added-large-files
+        args: [--maxkb=5000]
+        exclude: ^docs/
+      - id: check-merge-conflict
+      - id: check-json
+        exclude: ^docs/
+      - id: check-yaml
+      - id: check-toml
+      - id: detect-private-key
+      - id: end-of-file-fixer
+        exclude: ^docs/
+      - id: trailing-whitespace
+        exclude: ^docs/
+  - repo: local
+    hooks:
+      - id: forbid-databases
+        name: forbid committing database files
+        entry: database files must not be committed (rebuild them with scripts/rebuild)
+        language: fail
+        files: \.(sqlite|sqlite3|db)$
