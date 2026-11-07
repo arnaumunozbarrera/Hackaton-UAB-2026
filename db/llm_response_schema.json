@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Tarvia SOC downstream LLM response",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["verdict", "final_severity", "severity_rationale", "confidence", "action", "escalate_n2", "referenced_alert_ids", "referenced_event_ids", "open_questions"],
+  "properties": {
+    "verdict": {"enum": ["true_positive", "benign_true_positive", "false_positive", "needs_more_info"]}, "final_severity": {"enum": ["informational", "low", "medium", "high", "critical"]}, "severity_rationale": {"type": "string"}, "confidence": {"type": "number", "minimum": 0, "maximum": 1}, "action": {"type": "string"}, "escalate_n2": {"type": "boolean"}, "referenced_alert_ids": {"type": "array", "items": {"type": "string"}}, "referenced_event_ids": {"type": "array", "items": {"type": "string"}}, "open_questions": {"type": "array", "items": {"type": "string"}}
+  }
+}
