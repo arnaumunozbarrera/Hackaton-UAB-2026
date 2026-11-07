@@ -51,6 +51,7 @@ class FilterResult:
     explanations: dict[str, Explanation] = field(default_factory=dict)  # N4 discarded -> context reference
     open_text_kept: dict[str, Explanation] = field(default_factory=dict)  # explained but kept (free text)
     guarded: dict[str, str] = field(default_factory=dict)  # explained but kept by a guard (G1/G2)
+    discarded_records: dict[str, LogRecord] = field(default_factory=dict)  # content of discarded cited logs
 
     def kept_for_alert(self, alert_id: str) -> list[LogRecord]:
         """Informative logs of one alert."""
@@ -140,6 +141,7 @@ def run_filter(data_dir: str | Path = "docs", config: NoiseFilterConfig | None =
     kept = {eid: records[eid] for eid in sorted(remaining)}
     alert_events = {aid: [e for e in ev_alerts_for(aid, alerts) if e in kept] for aid in sorted(alerts)}
     result = FilterResult(kept, dict(sorted(discarded.items())), alert_events, groups, ledger.stats)
+    result.discarded_records = {eid: records[eid] for eid in sorted(discarded)}
     if n4 is not None:
         result.explanations, result.open_text_kept, result.guarded = n4.discarded, n4.open_text_kept, n4.guarded
     return result
