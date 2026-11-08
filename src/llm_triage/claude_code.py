@@ -89,9 +89,11 @@ class ClaudeCodeRunner:
         model: str | None = None,
         max_turns: int = 16,
         max_repairs: int = 2,
+        max_context_requests: int = 6,
     ) -> None:
         self.builder, self.backend, self.model = builder, backend, model
         self.max_turns, self.max_repairs = max_turns, max_repairs
+        self.max_context_requests = max_context_requests
 
     @staticmethod
     def ensure_subscription_auth() -> bool:

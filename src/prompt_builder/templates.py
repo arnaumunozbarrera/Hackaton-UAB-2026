@@ -37,5 +37,5 @@ Ajuste: $severity_flags
 Runbook $runbook_id ($runbook_focus): $runbook_plan$runbook_notes
 Logs informativos $informative_count/$cited_count: $informative_logs
 Apartados: $set_aside
-alert_ids=["$alert_id"]
+${similar_alerts}alert_ids=["$alert_id"]
 """

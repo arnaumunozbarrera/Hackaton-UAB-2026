@@ -77,6 +77,7 @@ class AlertContext:
     informative_logs: list[InformativeLog] = field(default_factory=list)
     set_aside: dict[str, list[str]] = field(default_factory=dict)  # stage -> event_ids
     explanations: dict[str, str] = field(default_factory=dict)  # event_id -> context reference (N4)
+    similar_alerts: list[dict[str, Any]] = field(default_factory=list)  # resolved neighbours (embeddings)
 
 
 # Alerts whose target is a business service rather than a host or identity (no host entity in the alert).

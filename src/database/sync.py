@@ -127,6 +127,7 @@ class AlertFeed:
         db_path: Path | str | None = None,
         api: SocApi | None = None,
         progress: Callable[[str], None] = print,
+        page_size: int = 500,
     ):
         path = Path(db_path or os.environ.get("TARVIA_DB") or ROOT / "data" / "tarvia.sqlite")
         if not path.exists():
@@ -136,7 +137,7 @@ class AlertFeed:
         self.connection = sqlite3.connect(path)
         self.connection.execute("PRAGMA foreign_keys=ON")
         self.ingestor = AlertIngestor(self.connection, self.api)
-        self.queue = self.api.alerts(status="new")
+        self.queue = self.api.alerts(status="new", page_size=page_size)
         self.summary = {"seen": 0, "already_stored": 0, "alerts_added": 0, "events_added": 0, "rejected": {}}
 
     def __enter__(self) -> "AlertFeed":

@@ -200,7 +200,7 @@ def test_background_job_survives_without_holding_the_request():
 
     from src.llm_triage.server import App
 
-    app = App("docs", mode="mock")
+    app = App("docs", mode="mock", dataset=True)
     job_id = app.start_job(ALERT)
     for _ in range(300):
         job = app.job(job_id)

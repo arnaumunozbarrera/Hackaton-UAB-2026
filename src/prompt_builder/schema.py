@@ -97,7 +97,8 @@ QUERIES: dict[str, QuerySpec] = {
     ),
     "log_detail": QuerySpec(
         "Registro completo de un log (campo detail: JSON no confiable)",
-        "SELECT {dim_log.source}, {dim_log.timestamp}, {dim_log.detail} FROM {dim_log} WHERE {dim_log.event_id} = ?",
+        "SELECT {v_log_detail.source}, {v_log_detail.timestamp}, {v_log_detail.detail} FROM {v_log_detail} "
+        "WHERE {v_log_detail.event_id} = ?",
         ("event_id",),
     ),
     "user_profile": QuerySpec(
