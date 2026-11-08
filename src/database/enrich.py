@@ -16,6 +16,7 @@ import hashlib
 import json
 import os
 import sqlite3
+from collections import defaultdict
 from pathlib import Path
 
 from .schema import ROOT
@@ -263,8 +264,9 @@ def _matrix(conn: sqlite3.Connection, data_dir: Path) -> dict[tuple[str, str], s
 
 
 def _create_alert_tables(conn: sqlite3.Connection, data_dir: Path, rebuild: bool) -> int:
-    """alert_enriched (v_alert_enriched) and alert_dedup, only for alerts that lack them."""
-    from ..prompt_builder.context import PRODUCT_SERVICES
+    """Refresh alert lookups against current inventory and policy; return the newly added count."""
+    from ..criticality_scope import load_db_scopes
+    from ..prompt_builder.criticality import assess_criticality
 
     matrix = _matrix(conn, data_dir)
     if rebuild:
@@ -278,61 +280,70 @@ def _create_alert_tables(conn: sqlite3.Connection, data_dir: Path, rebuild: bool
     )
     conn.execute("CREATE TABLE IF NOT EXISTS alert_dedup (alert_id TEXT PRIMARY KEY, dedup_hash TEXT NOT NULL)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_alert_dedup_hash ON alert_dedup (dedup_hash)")
-    pending = [
-        r[0]
-        for r in conn.execute(
-            "SELECT alert_id FROM alerts WHERE alert_id NOT IN (SELECT alert_id FROM alert_enriched) ORDER BY alert_id"
-        )
-    ]
-    if not pending:
-        return 0
+    pending = conn.execute(
+        "SELECT COUNT(*) FROM alerts WHERE alert_id NOT IN (SELECT alert_id FROM alert_enriched)"
+    ).fetchone()[0]
+    # Recompute existing lookups too: inventory, identities, service links and the matrix can change.
+    alerts = conn.execute(
+        "SELECT a.alert_id, a.created_at, a.rule_id, a.severity, r.technique_id, r.runbook_id "
+        "FROM alerts a JOIN detection_rules r ON r.rule_id = a.rule_id ORDER BY a.alert_id"
+    ).fetchall()
     services = {n: c for n, c in conn.execute("SELECT name, criticality FROM business_services")}
+    scopes = load_db_scopes(conn)
+    inventory_hosts = {
+        row[0]: row for row in conn.execute("SELECT hostname,criticality,business_service,zone_id FROM assets")
+    }
+    users_by_alert, entities_by_alert = defaultdict(list), defaultdict(list)
+    for aid, *user in conn.execute(
+        "SELECT x.alert_id, d.user_key, d.privileged, d.vip, d.hr_event FROM alert_users x JOIN dim_user d "
+        "ON d.user_id = x.user_id ORDER BY x.alert_id, d.privileged DESC, d.vip DESC, d.user_key"
+    ):
+        users_by_alert[aid].append(user)
+    indicators = {}
+    for aid, *indicator in conn.execute(
+        "SELECT b.alert_id, b.context_key, c.reputation, c.sandbox_verdict FROM bridge_alert_entity b "
+        "LEFT JOIN dim_context c ON c.context_key = b.context_key WHERE b.context_key IS NOT NULL "
+        "ORDER BY b.alert_id, CASE c.reputation WHEN 'malicious' THEN 0 WHEN 'suspicious' THEN 1 ELSE 2 END, b.context_key"
+    ):
+        indicators.setdefault(aid, indicator)
+    for aid, kind, value in conn.execute("SELECT alert_id, entity_type, entity_value FROM bridge_alert_entity"):
+        entities_by_alert[aid].append(f"{kind}={value}")
     rows, dedup = [], []
-    for alert_id in pending:
-        created, rule_id, severity, technique, runbook, product = conn.execute(
-            "SELECT a.created_at, a.rule_id, a.severity, r.technique_id, r.runbook_id, r.source_product "
-            "FROM alerts a JOIN detection_rules r ON r.rule_id = a.rule_id WHERE a.alert_id = ?",
-            (alert_id,),
-        ).fetchone()
-        hosts = conn.execute(
-            "SELECT a.hostname, a.criticality, a.business_service, a.zone_id FROM alert_assets x "
-            "JOIN assets a ON a.asset_id = x.asset_id WHERE x.alert_id = ? ORDER BY a.hostname",
-            (alert_id,),
-        ).fetchall()
-        user = conn.execute(
-            "SELECT d.user_key, d.privileged, d.vip, d.hr_event FROM alert_users x JOIN dim_user d "
-            "ON d.user_id = x.user_id WHERE x.alert_id = ? ORDER BY d.privileged DESC, d.vip DESC, d.user_key LIMIT 1",
-            (alert_id,),
-        ).fetchone() or (None, None, None, None)
-        indicator = conn.execute(
-            "SELECT b.context_key, c.reputation, c.sandbox_verdict FROM bridge_alert_entity b "
-            "LEFT JOIN dim_context c ON c.context_key = b.context_key WHERE b.alert_id = ? AND b.context_key IS NOT NULL "
-            "ORDER BY CASE c.reputation WHEN 'malicious' THEN 0 WHEN 'suspicious' THEN 1 ELSE 2 END, b.context_key LIMIT 1",
-            (alert_id,),
-        ).fetchone() or (None, None, None)
-        crits = [h[1] for h in hosts] + [services[h[2]] for h in hosts if h[2] in services]
-        crits += [services[s] for s in PRODUCT_SERVICES.get(product, ()) if s in services]
-        crit = max(crits, key=lambda c: CRITICALITY_RANK.get(c, 0)) if crits else None
-        if crit is None:
-            crit = "Alta" if (user[1] or user[2]) else "Media"
+    for alert_id, created, rule_id, severity, technique, runbook in alerts:
+        scope = scopes[alert_id]
+        hosts, users = [inventory_hosts[h] for h in sorted(scope.assets)], users_by_alert[alert_id]
+        user = users[0] if users else (None, None, None, None)
+        indicator = indicators.get(alert_id, (None, None, None))
+        service_names = scope.services
+        crit = assess_criticality(
+            [(h[0], h[1]) for h in hosts],
+            [(name, services.get(name)) for name in sorted(service_names)],
+        ).level
         host = max(hosts, key=lambda h: CRITICALITY_RANK.get(h[1], 0)) if hosts else None
+        service = max(
+            sorted(service_names),
+            key=lambda name: CRITICALITY_RANK.get(services[name], 0),
+            default=host[2] if host else None,
+        )
         is_ot = any(str(h[3] or "").upper().startswith("OT") or str(h[0]).upper().startswith(OT_MARKERS) for h in hosts)
         rows.append((
             alert_id, created, rule_id, severity, technique, runbook, *user, host and host[0], crit,
-            host[2] if host else next(iter(PRODUCT_SERVICES.get(product, ())), None), *indicator,
+            service, *indicator,
             matrix.get((severity, crit)), int(is_ot),
         ))  # fmt: skip
-        values = sorted(
-            f"{t}={v}"
-            for t, v in conn.execute(
-                "SELECT entity_type, entity_value FROM bridge_alert_entity WHERE alert_id = ?", (alert_id,)
-            )
-        )
+        values = sorted(entities_by_alert[alert_id])
         key = f"{rule_id}|{created[:10]}|{';'.join(values)}"
         dedup.append((alert_id, hashlib.sha1(key.encode("utf-8")).hexdigest()[:16]))
-    conn.executemany(f"INSERT INTO alert_enriched VALUES ({','.join('?' * 18)})", rows)
-    conn.executemany("INSERT INTO alert_dedup VALUES (?, ?)", dedup)
-    return len(rows)
+    columns = [r[1] for r in conn.execute("PRAGMA table_info(alert_enriched)")]
+    updates = ", ".join(f"{name}=excluded.{name}" for name in columns if name != "alert_id")
+    conn.executemany(
+        f"INSERT INTO alert_enriched VALUES ({','.join('?' * 18)}) ON CONFLICT(alert_id) DO UPDATE SET {updates}", rows
+    )
+    conn.executemany(
+        "INSERT INTO alert_dedup VALUES (?, ?) ON CONFLICT(alert_id) DO UPDATE SET dedup_hash=excluded.dedup_hash",
+        dedup,
+    )
+    return pending
 
 
 def _create_incidents(conn: sqlite3.Connection) -> None:

@@ -1,8 +1,7 @@
 """SOC policy: severity matrix, adjustments, SLA, approvals and mandatory escalation.
 
-Why: the final severity must follow politica_soc.md. The prompt carries the relevant sections verbatim and a
-pre-computed *base* severity (rule severity x most critical affected asset or identity), so the LLM only has to
-justify the +-1 adjustment instead of re-deriving the matrix.
+Why: the severity matrix is parsed for deterministic calculation in code. The remaining policy sections
+provide the triage context for SLA, approvals, escalation and grouping.
 """
 
 from __future__ import annotations
@@ -85,7 +84,7 @@ def load_policy(path: str | Path) -> Policy:
     return Policy(_parse_matrix(sections["2"]), sections)
 
 
-def most_critical(levels: list[str]) -> str | None:
+def most_critical(levels: list[str | None]) -> str | None:
     """Highest criticality in the list, following the matrix column order."""
     known = [lv for lv in levels if lv in CRITICALITY_ORDER]
     return max(known, key=CRITICALITY_ORDER.index) if known else None

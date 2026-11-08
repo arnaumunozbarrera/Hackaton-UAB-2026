@@ -10,8 +10,8 @@ El prompt es **compacto**: identifica y apunta a funciones de lectura que devuel
 
 | Parte | Contenido | Tamaño |
 |---|---|---|
-| `system` (igual para todas las alertas, se puede cachear) | rol, 8 reglas y la política compactada: ajustes, SLA, aprobaciones, escalado y agrupación | ~3,1 KB |
-| `user` | alerta, evidencia entre `<datos_no_confiables>`, identificadores (valores de los parámetros), afectados, severidad base con la fila de la matriz, plan del runbook (Cn→funciones) y notas, logs informativos agrupados con sus ID comprimidos sin pérdida, logs apartados con su referencia | ~1,5 KB de media (máx. 2,1 KB) |
+| `system` (igual para todas las alertas, se puede cachear) | rol, 8 reglas y la política compactada: SLA, aprobaciones, escalado y agrupación; la severidad pertenece al sistema | Variable |
+| `user` | alerta, evidencia entre `<datos_no_confiables>`, identificadores (valores de los parámetros), afectados, severidad ya calculada como contexto para el escalado, plan del runbook (Cn→funciones) y notas, logs informativos agrupados con sus ID comprimidos sin pérdida, logs apartados con su referencia | Variable |
 | `tool` | `solicitar_contexto(motivo, comprobacion?, consultas[1..5])`: respuesta de tipo 2, con el enum de consultas de la alerta y sus firmas | ~2,4 KB |
 | `response_schema` | `ticket_salida.schema.json` para la salida estructurada (no va dentro del texto) | — |
 

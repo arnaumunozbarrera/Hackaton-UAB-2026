@@ -89,7 +89,7 @@ def test_builder_with_fake_context():
     assert "ALR-T-1" in user and "EDR-1" in user and "RB-02" in user
     assert user.count("</datos_no_confiables>") == 1  # injected closing tag neutralised
     assert pk.metadata["base_severity"] == "medium"  # medium x Alta
-    assert "ana.vip VIP o privilegiada" in user
+    assert "ana.vip (identidad user, VIP)" in user
     assert "window_start=2026-10-09T10:00:00.000Z" in user and "runbook_text(rule_id)" in user
     by_name = {q.name: q for q in pk.queries}
     assert {"runbook_text", "alert_enriched", "host_activity", "hash_activity"} <= set(by_name)

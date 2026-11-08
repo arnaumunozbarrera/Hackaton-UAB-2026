@@ -145,7 +145,7 @@ def test_invalid_ticket_is_sent_back_and_repaired(stack, ticket):
 def test_gives_up_after_max_repairs(stack, ticket):
     builder, backend = stack
     bad = copy.deepcopy(ticket)
-    bad["severity"] = "urgent"
+    bad.pop("summary")
     llm = ScriptedLLM(*[_ticket_block(i, bad) for i in range(5)])
     result = TriageRunner(builder, backend, max_repairs=2).run(ALERT, llm)
     assert not result.valid and result.attempts == 3 and result.errors
@@ -178,7 +178,9 @@ def test_claude_code_handlers_validate_and_report(stack, ticket):
     first = asyncio.run(h.emitir(bad))
     assert first["is_error"] and "corrige" in first["content"][0]["text"]
     good = asyncio.run(h.emitir(ticket))
-    assert "is_error" not in good and state.ticket == ticket and state.errors == [] and state.attempts == 2
+    assert "is_error" not in good and state.ticket["summary"] == ticket["summary"]
+    assert state.ticket["severity"] == state.package.metadata["base_severity"]
+    assert state.errors == [] and state.attempts == 2
 
 
 def test_claude_code_options_restrict_tools(stack, monkeypatch):

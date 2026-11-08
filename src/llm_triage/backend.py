@@ -18,7 +18,8 @@ from ..log_noise_discard.context import Context, load_context, parse_ts
 from ..log_noise_discard.loaders import LOGS_DIR
 from ..log_noise_discard.templates import SOURCES, normalise_identity
 from ..prompt_builder import QUERIES, DatasetContextSource, PromptBuilder
-from ..prompt_builder.policy import CRITICALITY_ORDER, most_critical
+from ..prompt_builder.criticality import assess_criticality
+from ..prompt_builder.policy import CRITICALITY_ORDER
 
 MAX_ROWS = 50
 SCAN_CAP = 2000
@@ -105,13 +106,20 @@ class DatasetToolBackend:
             return []
         c = self.src.get(alert_id)
         user, host = (c.users[0] if c.users else None), (c.hosts[0] if c.hosts else None)
-        crit = most_critical([h.criticality for h in c.hosts] + [s.criticality for s in c.services])
+        crit = assess_criticality(
+            [(h.hostname, h.criticality) for h in c.hosts],
+            [(s.name, s.criticality) for s in c.services],
+        ).level
+        service = max(
+            c.services,
+            key=lambda s: CRITICALITY_ORDER.index(s.criticality) if s.criticality in CRITICALITY_ORDER else -1,
+            default=None,
+        )
         return [{
             "created_at": c.created_at, "rule_id": c.rule_id, "rule_severity": c.rule_severity,
             "technique_id": c.technique_id, "user_key": user and user.user_key, "privileged": user and user.privileged,
             "vip": user and user.vip, "hr_event": user and user.hr_event, "hostname": host and host.hostname,
-            "asset_criticality": crit, "business_service": host.business_service if host else
-            (c.services[0].name if c.services else None),
+            "asset_criticality": crit, "business_service": service.name if service else (host.business_service if host else None),
             "matrix_base_severity": self.builder.policy.base_severity(c.rule_severity, crit or "Media"),
         }]  # fmt: skip
 

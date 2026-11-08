@@ -1,8 +1,9 @@
 """LLM triage loop against the Anthropic Messages API, with a mock model for offline use.
 
 Why: one loop sends the prompt package, answers type-2 responses (`solicitar_contexto`: read-only context requests
-with a reason) through a backend (dataset today, database later) and forces the result through the `emitir_ticket` tool, whose input schema is the ticket schema. Every
-ticket is validated (schema + policy); an invalid one is sent back to the model as a tool error, up to
+with a reason) through a backend (dataset today, database later) and forces the model-owned fields through
+`emitir_ticket`. Severity fields are completed from the matrix by the server before schema + policy validation;
+an invalid ticket is sent back to the model as a tool error, up to
 `max_repairs` times, so the caller always receives the same format or an explicit failure.
 """
 
@@ -16,6 +17,7 @@ from typing import Any, Protocol
 
 from ..prompt_builder import PromptBuilder, PromptPackage
 from ..prompt_builder.tools import TOOL_NAME
+from ..severity import apply_matrix_severity
 from .context_requests import ContextBudget, handle_context_request
 from .validator import tool_schema, validate_ticket
 
@@ -74,9 +76,7 @@ class MockLLM:
         ticket = {
             "ticket_id": f"TKT-MOCK-{p.alert_id}", "alert_ids": [p.alert_id],
             "title": f"[MOCK] Triaje simulado de {p.metadata['rule_id']}", "verdict": "needs_more_info",
-            "confidence": 0.1, "severity": p.metadata["base_severity"] if p.metadata["base_severity"] in
-            ("informational", "low", "medium", "high", "critical") else "low",
-            "severity_rationale": "Modo mock: severidad base de la matriz sin ajuste.",
+            "confidence": 0.1,
             "summary": "Respuesta simulada sin LLM para probar el flujo y la validación del formato.",
             "evidence": [], "recommended_actions": [{"action": "revisar", "target": "analista", "requires_approval": False}],
             "escalation": {"escalate": False, "to": "", "reason": ""},
@@ -175,10 +175,8 @@ class TriageRunner:
                     log.append({"type": "texto", "output": block["text"][:1500]})
                 elif block["type"] == "tool_use" and block["name"] == TICKET_TOOL:
                     attempts += 1
-                    ticket, errors = (
-                        block.get("input"),
-                        validate_ticket(block.get("input"), package.response_schema, alert_id),
-                    )
+                    ticket = apply_matrix_severity(block.get("input"), package.metadata)
+                    errors = validate_ticket(ticket, package.response_schema, alert_id)
                     log.append({"type": "ticket", "attempt": attempts, "errors": errors})
                     done = not errors or attempts > self.max_repairs
                     msg = "Ticket válido." if not errors else "Ticket no válido, corrige: " + "; ".join(errors)

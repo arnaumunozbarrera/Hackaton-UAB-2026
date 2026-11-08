@@ -15,8 +15,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
+from ..criticality_scope import PRODUCT_SERVICES, AlertScope, load_dataset_scopes
 from ..log_noise_discard import FilterResult, run_filter
 from ..log_noise_discard.loaders import load_alerts
+from .criticality import affected_service_names
 
 
 @dataclass(frozen=True)
@@ -78,14 +80,8 @@ class AlertContext:
     set_aside: dict[str, list[str]] = field(default_factory=dict)  # stage -> event_ids
     explanations: dict[str, str] = field(default_factory=dict)  # event_id -> context reference (N4)
     similar_alerts: list[dict[str, Any]] = field(default_factory=list)  # resolved neighbours (embeddings)
-
-
-# Alerts whose target is a business service rather than a host or identity (no host entity in the alert).
-PRODUCT_SERVICES: dict[str, tuple[str, ...]] = {
-    "WAF": ("Tienda online y app",),
-    "ECOM": ("Tienda online y app",),
-    "AI_GATEWAY": ("Asistente de compra con IA «Vela»",),
-}
+    criticality_relations: list[dict[str, str]] = field(default_factory=list)
+    unresolved_relations: list[str] = field(default_factory=list)
 
 
 class ContextSource(Protocol):
@@ -143,8 +139,25 @@ class DatasetContextSource:
         self.hr = {_user_key(r["usuario"]): r["tipo"] for r in _read_csv(inv / "eventos_rrhh.csv")}
         self.catalog = {r["rule_id"]: r for r in _read_csv(self.data / "01_contexto" / "catalogo_casos_de_uso.csv")}
         self.services = {r["servicio"]: r for r in _read_csv(inv / "servicios_negocio.csv")}
+        self.asset_services: dict[str, set[str]] = {}
+        relations = self.data.parent / "implementation_docs" / "asset_services.csv"
+        if relations.exists():
+            asset_names = {r["asset_id"]: r["hostname"] for r in self.assets.values()}
+            service_names = {str(i): name for i, name in enumerate(self.services, 1)}
+            for row in _read_csv(relations):
+                hostname, service = asset_names.get(row["asset_id"]), service_names.get(row["service_id"])
+                if hostname and service:
+                    self.asset_services.setdefault(hostname, set()).add(service)
         self.product_services = PRODUCT_SERVICES if product_services is None else product_services
         self._filter = filter_result
+        self._scopes: dict[str, AlertScope] | None = None
+
+    def _scope_for(self, alert_id: str) -> AlertScope:
+        if self._scopes is None:
+            self._scopes = load_dataset_scopes(
+                self.data, self.assets, self.services, self.asset_services, self.alerts, self.product_services
+            )
+        return self._scopes[alert_id]
 
     @property
     def filter_result(self) -> FilterResult:
@@ -163,7 +176,11 @@ class DatasetContextSource:
         return known, unknown
 
     def _services(self, product: str, hosts: list[AffectedAsset]) -> list[AffectedService]:
-        names = set(self.product_services.get(product, ())) | {h.business_service for h in hosts}
+        names = affected_service_names(
+            [(h.hostname, h.business_service) for h in hosts],
+            self.asset_services,
+            self.product_services.get(product, ()),
+        )
         rows = [self.services[n] for n in sorted(names) if n in self.services]
         return [AffectedService(r["servicio"], r["criticidad"], r["activos"], r["responsable"]) for r in rows]
 
@@ -199,8 +216,9 @@ class DatasetContextSource:
         if alert is None:
             raise KeyError(f"unknown alert: {alert_id}")
         ent = alert.get("entities") or {}
+        scope = self._scope_for(alert_id)
         host_values = _flatten(ent.get("hosts"))
-        hosts, unknown_hosts = self._hosts([h for h in host_values if not _is_ip(h)])
+        hosts, unknown_hosts = self._hosts([h for h in host_values if not _is_ip(h)] + sorted(scope.assets))
         users, unknown_users = self._users(_user_ids(ent.get("users")))
         others = {k: sorted(set(_flatten(v))) for k, v in ent.items() if k not in ("hosts", "users")}
         host_ips = [h for h in host_values if _is_ip(h)]
@@ -208,10 +226,23 @@ class DatasetContextSource:
             others["ips"] = sorted(set(others.get("ips", [])) | set(host_ips))
         logs, set_aside, refs = self._logs(alert)
         mitre = alert.get("mitre") or {}
-        return AlertContext(
+        ctx = AlertContext(
             alert_id, alert["created_at"], alert["rule_id"], alert["rule_name"], alert["severity"],
             alert["source_product"], mitre.get("technique_id", ""), mitre.get("tactic", ""),
             alert.get("runbook") or self.catalog.get(alert["rule_id"], {}).get("runbook", ""),
             alert.get("description", ""), json.dumps(alert.get("evidence") or {}, ensure_ascii=False),
             hosts, self._services(alert["source_product"], hosts), unknown_hosts, users, unknown_users, others, logs, set_aside, refs,
         )  # fmt: skip
+        service_names = scope.services | {s.name for s in ctx.services}
+        ctx.services = [
+            AffectedService(
+                name,
+                self.services[name]["criticidad"],
+                self.services[name]["activos"],
+                self.services[name]["responsable"],
+            )
+            for name in sorted(service_names)
+        ]
+        ctx.criticality_relations = scope.provenance()
+        ctx.unresolved_relations = sorted(scope.unresolved)
+        return ctx

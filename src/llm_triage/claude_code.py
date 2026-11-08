@@ -20,6 +20,7 @@ from typing import Any
 
 from ..prompt_builder import PromptBuilder, PromptPackage
 from ..prompt_builder.tools import TOOL_NAME
+from ..severity import apply_matrix_severity
 from .client import TICKET_TOOL, Backend, TriageResult
 from .context_requests import ContextBudget, handle_context_request
 from .validator import tool_schema, validate_ticket
@@ -68,7 +69,8 @@ class ToolHandlers:
     async def emitir(self, args: dict[str, Any]) -> dict[str, Any]:
         s = self.state
         s.attempts += 1
-        s.ticket, s.errors = args, validate_ticket(args, s.package.response_schema, s.package.alert_id)
+        s.ticket = apply_matrix_severity(args, s.package.metadata)
+        s.errors = validate_ticket(s.ticket, s.package.response_schema, s.package.alert_id)
         s.log.append({"type": "ticket", "attempt": s.attempts, "errors": s.errors})
         if not s.errors:
             return _text("Ticket válido. Termina sin añadir nada más.")
