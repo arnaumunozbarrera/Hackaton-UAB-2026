@@ -17,6 +17,8 @@ import sqlite3
 from dataclasses import dataclass, field
 from typing import Any
 
+from .severity_audit import inherited_decision_evidence
+
 SEVERE = ("high", "critical")
 # N4 categories that describe authorised activity (approved change, company rule, notified travel).
 AUTHORISED = ("A_", "B_", "F_")
@@ -28,6 +30,7 @@ class Decision:
     reason: str
     ticket: dict[str, Any] | None = None
     references: list[str] = field(default_factory=list)
+    inherited_evidence: dict[str, Any] | None = None
 
 
 def decide(conn: sqlite3.Connection, alert_id: str, ctx: Any = None) -> Decision:
@@ -49,7 +52,8 @@ def decide(conn: sqlite3.Connection, alert_id: str, ctx: Any = None) -> Decision
         and (parent := resolved_duplicate(conn, alert_id))
     ):
         return Decision("discriminator", f"duplicado de {parent[0]}, ya resuelta (agrupación, apartado 6)",
-                        _grouped(alert_id, *parent), [parent[0]])  # fmt: skip
+                        _grouped(alert_id, *parent), [parent[0]],
+                        inherited_decision_evidence(conn, *parent))  # fmt: skip
     if not states:
         return Decision("llm", "sin selección de logs: el LLM revisa la alerta completa")
     kinds = {s[2] for s in states}

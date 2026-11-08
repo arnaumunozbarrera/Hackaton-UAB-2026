@@ -175,7 +175,7 @@
     }else if(run&&run.status==='error'){
       body=`<div class="ai-msg err"><b>LLM analysis failed.</b> ${E(run.error)}<br/><small>Claude Code: run <span class="mono">claude</span> → /login once. API: set ANTHROPIC_API_KEY in .env.</small></div><button class="action primary" data-analyze>Retry LLM analysis</button>`;
     }else if(real){
-      body=`<div class="ai-msg ok"><b>LLM criterion applied</b> · ${E(t.model)} · ${E(t.attempts)} attempt(s) · ${E(t.elapsed_s||0)} s. The verdict, severity, evidence and actions below come from the model and passed schema + policy validation.</div><button class="action outline" data-analyze>Re-run LLM analysis</button>`;
+      body=`<div class="ai-msg ok"><b>LLM criterion applied</b> · ${E(t.model)} · ${E(t.attempts)} attempt(s) · ${E(t.elapsed_s||0)} s. The model provides the verdict, evidence and proposed actions, subject to schema validation and SOC policy rules. Severity and its rationale are determined by the system, using the SOC matrix or the deterministic discriminator.</div><button class="action outline" data-analyze>Re-run LLM analysis</button>`;
     }else if(mode==='mock'){
       body=`<div class="ai-msg warn"><b>No real LLM configured.</b> This ticket comes from ${t.route==='discriminator'?'the deterministic discriminator':'the mock model'}. Start the server with <span class="mono">--claude-code</span>, <span class="mono">--detail-mode claude-code</span> or an API key to get the LLM criterion.</div>`;
     }else{

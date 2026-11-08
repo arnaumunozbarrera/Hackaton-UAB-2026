@@ -2,12 +2,16 @@
 
 import copy
 import sqlite3
+import threading
 
 import pytest
 
 from src.database.live import create_live
+from src.prompt_builder import DbContextSource, PromptBuilder
 from src.severity import apply_matrix_severity, assessment_for_ticket
 from src.triage_flow import severity_audit, store
+from src.triage_flow.automation import PolicyAutomation
+from src.triage_flow.flow import TriageFlow
 from tests import test_criticality
 from tests.test_criticality import both_paths
 
@@ -153,3 +157,109 @@ def test_live_copy_clears_assessments_before_alerts_without_changing_original(db
         assert live.execute("SELECT count(*) FROM severity_assessments").fetchone()[0] == 0
         assert live.execute("PRAGMA foreign_key_check").fetchall() == []
     assert len(severity_audit.history(db, "A1")) == 1
+
+
+def test_duplicate_pins_the_original_assessment_even_after_parent_retriage(db):
+    db.execute("UPDATE alerts SET severity='low' WHERE alert_id='A1'")
+    db.execute(
+        "INSERT INTO alerts(alert_id,created_at,rule_id,severity) VALUES ('A2','2026-10-10T10:01:00Z','R1','low')"
+    )
+    db.execute("INSERT INTO alert_assets VALUES ('A2','H1')")
+    db.execute("INSERT INTO logs VALUES ('E1','2026-10-10T10:00:00Z','vpn')")
+    db.execute("INSERT INTO alert_events VALUES ('A1',0,'E1')")
+    db.execute(
+        "INSERT INTO alert_log_selection VALUES ('A1','E1','vpn','2026-10-10T10:00:00Z','N4','explained:A_cambio_aprobado','CHG-1')"
+    )
+    both_paths(db)
+    # The actual flow is exercised against the in-memory database, without preparation or model calls.
+    flow = TriageFlow.__new__(TriageFlow)
+    flow.conn, flow.lock = db, threading.RLock()
+    flow.source = DbContextSource(db)
+    flow.builder = PromptBuilder(flow.source)
+    flow.policy = PolicyAutomation(auto_containment=False)
+    assert flow.triage("A1")["route"] == "discriminator"
+    original = severity_audit.history(db, "A1")[0]
+    assert flow.triage("A2")["route"] == "discriminator"
+    child = severity_audit.history(db, "A2")[0]
+    inherited = next(e for e in child["evidence"] if e["condition"] == "inherited_decision")
+    assert inherited["status"] == "confirmed" and inherited["source"] == "severity_assessments"
+    assert inherited["source_key"] == str(original["assessment_id"])
+    assert inherited["details"]["source_alert_id"] == "A1"
+    assert inherited["details"]["source_assessment_id"] == original["assessment_id"]
+    assert inherited["details"]["grouping_reason"]
+    assert not any(e["condition"] == "existing_discriminator_context" for e in child["evidence"])
+
+    db.execute("UPDATE alerts SET severity='high' WHERE alert_id='A1'")
+    body, assessment = calculation(db)
+    save(db, body, assessment)
+    assert severity_audit.history(db, "A1")[0]["assessment_id"] != original["assessment_id"]
+    assert severity_audit.history(db, "A1")[0]["final_severity"] == "critical"
+    assert severity_audit.history(db, "A2")[0] == child
+    linked = db.execute(
+        "SELECT alert_id,final_severity FROM severity_assessments WHERE assessment_id=?",
+        (inherited["details"]["source_assessment_id"],),
+    ).fetchone()
+    assert linked == ("A1", child["final_severity"])
+
+
+@pytest.mark.parametrize("corrupt", ["source_alert_id", "source_assessment_id", "source_key"])
+def test_inconsistent_parent_reference_is_rejected_atomically(db, corrupt):
+    body, assessment = calculation(db)
+    save(db, body, assessment)
+    db.execute(
+        "INSERT INTO alerts(alert_id,created_at,rule_id,severity) VALUES ('A2','2026-10-10T10:01:00Z','R1','medium')"
+    )
+    evidence = severity_audit.inherited_decision_evidence(db, "A1", body)
+    child = copy.deepcopy(assessment)
+    child.update(alert_id="A2", method="discriminator", adjustment=None)
+    child["evidence"].append(evidence)
+    if corrupt == "source_key":
+        evidence["source_key"] = "99999"
+    else:
+        evidence["details"][corrupt] = "OTHER" if corrupt == "source_alert_id" else 99999
+    db.commit()
+    with pytest.raises(ValueError):
+        store.save_ticket(
+            db, "A2", body | {"alert_ids": ["A1", "A2"]}, valid=True, route="discriminator", severity_assessment=child
+        )
+    assert severity_audit.history(db, "A2") == []
+    assert store.get_ticket(db, "A2") is None
+
+
+def test_legacy_or_mismatching_parent_audit_is_explicit_and_snapshot_is_frozen(db):
+    body, assessment = calculation(db)
+    save(db, body, assessment)
+    changed = body | {"severity": "low"}
+    evidence = severity_audit.inherited_decision_evidence(db, "A1", changed)
+    assert evidence["source"] == "triage_tickets" and evidence["status"] == "unknown"
+    assert evidence["details"]["source_assessment_id"] is None
+    changed["severity"] = "critical"
+    assert evidence["details"]["source_ticket_snapshot"]["severity"] == "low"
+
+
+def test_source_version_is_pinned_before_the_duplicate_is_saved(db):
+    body, assessment = calculation(db)
+    body["verdict"] = assessment["verdict"] = "benign_true_positive"
+    save(db, body, assessment)
+    origin = severity_audit.history(db, "A1")[0]
+    db.execute(
+        "INSERT INTO alerts(alert_id,created_at,rule_id,severity) VALUES ('A2','2026-10-10T10:01:00Z','R1','medium')"
+    )
+    child = copy.deepcopy(assessment)
+    child.update(alert_id="A2", method="discriminator", adjustment=None)
+    child["evidence"].append(severity_audit.inherited_decision_evidence(db, "A1", body))
+
+    # A1 gets another valid assessment after the duplicate's source was selected, before A2 is stored.
+    later_body = body | {"verdict": "needs_more_info"}
+    later_assessment = copy.deepcopy(assessment)
+    later_assessment["verdict"] = "needs_more_info"
+    save(db, later_body, later_assessment)
+    store.save_ticket(
+        db, "A2", body | {"alert_ids": ["A1", "A2"]}, valid=True, route="discriminator", severity_assessment=child
+    )
+
+    inherited = next(
+        e for e in severity_audit.history(db, "A2")[0]["evidence"] if e["condition"] == "inherited_decision"
+    )
+    assert inherited["details"]["source_assessment_id"] == origin["assessment_id"]
+    assert inherited["details"]["source_assessment_id"] != severity_audit.history(db, "A1")[0]["assessment_id"]

@@ -365,6 +365,9 @@ def test_resolved_duplicate_joins_the_ticket_without_llm():
     store.save_ticket(conn, "A1", discriminator.decide(conn, "A1").ticket, valid=True, route="discriminator")
     d = discriminator.decide(conn, "A2")
     assert d.route == "discriminator" and d.ticket["alert_ids"] == ["A1", "A2"] and d.references == ["A1"]
+    assert d.inherited_evidence["details"]["source_alert_id"] == "A1"
+    assert d.inherited_evidence["details"]["source_assessment_id"] is None
+    assert d.inherited_evidence["status"] == "unknown"  # legacy parent: no assessment is invented
 
 
 def test_similar_resolved_survives_swap_of_resolved_alerts():

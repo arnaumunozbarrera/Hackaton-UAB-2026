@@ -47,6 +47,14 @@ Las evidencias actuales documentan las criticidades de activos y servicios, las 
 
 Las evidencias del cálculo se construyen con datos del sistema, separadas del campo `evidence` que pueda entregar el modelo. El cambio no introduce reglas nuevas de subida, bajada o actividad autorizada.
 
+## Decisiones heredadas de duplicados
+
+Un cierre por duplicado añade una evidencia `inherited_decision`. En `details_json` conserva `source_alert_id`, `source_assessment_id`, el motivo de agrupación y copias de los datos de origen. `source = severity_assessments` y `source_key` identifican la evaluación concreta utilizada, no la evaluación más reciente que pueda tener la alerta en el futuro.
+
+La referencia se selecciona junto al ticket de origen. Al guardar el duplicado se comprueba que esa evaluación existe, pertenece a la alerta indicada y coincide con la severidad, el veredicto y la justificación heredados. Un nuevo triaje de la alerta original no modifica la referencia del duplicado. Se aprovechan los campos de referencia y JSON existentes de `severity_evidence`, sin cambiar el esquema de la tabla.
+
+Si el ticket de origen es antiguo y no tiene una evaluación coincidente, se conserva su copia y la alerta de origen, con `source_assessment_id = NULL` y estado `unknown`. No se inventa una versión ni se vincula una evaluación que no corresponda. Las explicaciones N4 de la alerta duplicada no se presentan como el motivo de un cierre que realmente se decidió por herencia.
+
 ## Ajustes pendientes
 
 Los ajustes +1/−1 se registran como `not_evaluated`: no se convierten en condiciones falsas ni se inventa una ventana de observación. Cuando se implementen, cada condición deberá guardar su resultado, los campos concretos de los eventos utilizados y las referencias a la autorización cuando proceda.

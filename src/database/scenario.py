@@ -107,6 +107,13 @@ def prepare(db: Path, alerts_file: Path) -> dict:
         conn.executemany("INSERT OR IGNORE INTO incoming VALUES (?)", [(a,) for a in incoming])
         present = [r[0] for r in conn.execute("SELECT alert_id FROM alerts WHERE alert_id IN (SELECT * FROM incoming)")]
         removed = {}
+        # Evidence has no alert_id: remove children before the generic loop deletes their assessments.
+        n = conn.execute(
+            "DELETE FROM severity_evidence WHERE assessment_id IN "
+            "(SELECT assessment_id FROM severity_assessments WHERE alert_id IN (SELECT alert_id FROM incoming))"
+        ).rowcount
+        if n:
+            removed["severity_evidence"] = n
         for table in _alert_tables(conn):
             n = conn.execute(f'DELETE FROM "{table}" WHERE alert_id IN (SELECT alert_id FROM incoming)').rowcount  # noqa: S608
             if n:

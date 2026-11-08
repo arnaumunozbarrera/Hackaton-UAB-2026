@@ -286,7 +286,9 @@ class TriageFlow:
                                   round(time.monotonic() - started, 3))  # fmt: skip
             if result.valid:
                 result.severity_assessment = assessment_for_ticket(discriminator_metadata, ticket, "discriminator")
-                for eid, reason, reference in explained:
+                if decision.inherited_evidence is not None:
+                    result.severity_assessment["evidence"].append(decision.inherited_evidence)
+                for eid, reason, reference in [] if decision.inherited_evidence is not None else explained:
                     result.severity_assessment["evidence"].append(
                         {
                             "condition": "existing_discriminator_context",
