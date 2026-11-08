@@ -13,3 +13,5 @@ CSV derivados para alimentar relaciones:
 Los datos originales permanecen en `docs/`. El [esquema SQL](../src/database/schema.sql) y los cargadores de `src/database/` implementan este diseño.
 
 `python -m src.database.build` genera la base local `data/tarvia.sqlite` y el informe `data/tarvia.ingestion.json`, con recuentos, comprobaciones y huellas de las fuentes.
+
+El [módulo de selección de logs](../src/log_noise_discard/README.md) complementa el análisis con etapas N0–N4. Su selección no altera la ingesta completa ni los datos almacenados en SQLite.

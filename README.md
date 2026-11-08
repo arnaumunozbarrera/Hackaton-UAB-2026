@@ -11,6 +11,7 @@ El esquema SQLite está en [src/database/schema.sql](src/database/schema.sql) y 
 - `docs/`: datos originales, contexto, política SOC y herramientas del reto. No modificar.
 - `implementation_docs/`: diseño acordado y CSV derivados de relaciones.
 - `src/database/`: esquema, carga y validación del modelo acordado.
+- `src/log_noise_discard/`: selección de logs informativos, con etapas N0–N4 y justificaciones.
 - `data/`: base SQLite e informe de ingesta locales; no se versionan.
 - `tests/`: pruebas de conversión, integridad e ingesta.
 - `scripts/`: preparación del entorno y arranque de la API simulada.
@@ -63,3 +64,13 @@ pytest
 ruff check .
 ruff format --check .
 ```
+
+## Seleccionar logs informativos
+
+```bash
+python -m src.log_noise_discard --data docs
+```
+
+El [filtro de ruido](src/log_noise_discard/README.md) devuelve una selección para los pasos de análisis,
+con el motivo de cada descarte. Lee las fuentes originales y no borra eventos ni modifica la base SQLite.
+La ingesta mantiene todos los logs; el filtro y la base de datos se pueden utilizar de forma independiente.
