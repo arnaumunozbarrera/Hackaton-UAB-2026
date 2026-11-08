@@ -103,11 +103,20 @@ class _Ledger:
         self.stats.append(StageStat(stage, STAGE_DESCRIPTIONS[stage], len(ids), removed, self.events, self.size))
 
 
-def run_filter(data_dir: str | Path = "docs", config: NoiseFilterConfig | None = None) -> FilterResult:
-    """Apply N0-N3 and return only the informative logs, without modifying any file."""
+def run_filter(
+    data_dir: str | Path = "docs",
+    config: NoiseFilterConfig | None = None,
+    alerts: dict[str, dict[str, Any]] | None = None,
+) -> FilterResult:
+    """Apply N0-N4 and return only the informative logs, without modifying any file.
+
+    `alerts` limits the alert universe (default: every alert of the dataset). The cross-alert stages depend on it:
+    N0 keeps only logs cited by these alerts, N2 and N3 compare only these alerts, so a log set aside because other
+    alerts also cited it can become informative again.
+    """
     cfg = config or NoiseFilterConfig()
     data = Path(data_dir)
-    alerts = load_alerts(data)
+    alerts = load_alerts(data) if alerts is None else alerts
     ev_alerts = _index_alerts(alerts)
     ctx = load_context(data) if "N4" in cfg.stages else None
     records, total_events, total_bytes = _load_cited(data, ev_alerts, ctx)

@@ -44,3 +44,5 @@ out/
 .DS_Store
 Thumbs.db
 desktop.ini
+data/checkpoints/
+data/containment_log.jsonl

@@ -111,3 +111,11 @@ CREATE TABLE IF NOT EXISTS "soc_actions" (
 
 CREATE INDEX IF NOT EXISTS "idx_soc_actions_alert" ON "soc_actions" ("alert_id");
 CREATE INDEX IF NOT EXISTS "idx_ticket_automation_due" ON "ticket_automation" ("sla_due_at");
+
+-- Demo scenario (src.database.scenario): alerts already handled before a new batch arrives. They keep their
+-- real ticket (no invented verdict or decision) but no longer appear as pending in the queue or the batch runner.
+CREATE TABLE IF NOT EXISTS "backlog_closed" (
+  "alert_id" TEXT PRIMARY KEY,
+  "closed_at" TEXT NOT NULL,
+  "reason" TEXT
+);

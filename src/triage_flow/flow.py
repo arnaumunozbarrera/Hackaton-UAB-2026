@@ -8,6 +8,7 @@ sync (SOC API -> DB) -> enrich -> log selection -> embeddings -> per alert: disc
 from __future__ import annotations
 
 import json
+import sqlite3
 import sys
 import threading
 import time
@@ -63,11 +64,7 @@ class TriageFlow:
             derived = enrich.refresh(self.conn, self.data)
             derived["sla_clock_started"] = automation.mark_received(self.conn)
             if selection.alerts_without_selection(self.conn):
-                if getattr(self, "_filter", None) is None:
-                    from ..log_noise_discard import run_filter
-
-                    self._filter = run_filter(self.data)  # once per process: the dataset does not change
-                sel = selection.persist_selection(self.conn, self._filter)
+                sel = selection.persist_selection(self.conn, self._noise_filter())
             else:
                 sel = {}
             from ..embeddings.encoder import get_encoder
@@ -86,6 +83,34 @@ class TriageFlow:
                              "seconds": round(time.monotonic() - t0, 1)}  # fmt: skip
         self.progress(f"[flow] prepared: {out}")
         return out
+
+    def filter_scope(self) -> str:
+        """'dataset' (default: every alert of docs/) or 'database' (only the alerts in this database, demo copies)."""
+        try:
+            row = self.conn.execute("SELECT value FROM pipeline_meta WHERE key = 'filter_scope'").fetchone()
+        except sqlite3.OperationalError:
+            return "dataset"
+        return row[0] if row and row[0] in ("dataset", "database") else "dataset"
+
+    def _noise_filter(self):  # noqa: ANN202
+        """Log noise filter result, cached while its alert universe does not change."""
+        from ..log_noise_discard import run_filter
+        from ..log_noise_discard.loaders import load_alerts
+
+        scope, alerts = self.filter_scope(), None
+        if scope == "database":
+            ids = {r[0] for r in self.conn.execute("SELECT alert_id FROM alerts")}
+            alerts = {k: v for k, v in load_alerts(self.data).items() if k in ids}
+            key = ("database", frozenset(alerts))
+        else:
+            key = ("dataset",)
+        if getattr(self, "_filter", None) is None or getattr(self, "_filter_key", None) != key:
+            self._filter = run_filter(self.data, alerts=alerts)
+            self._filter_key = key
+            self.progress(
+                f"[flow] log filter recomputed over {'the dataset' if alerts is None else len(alerts)} alerts"
+            )
+        return self._filter
 
     def _backfill(self) -> int:
         """Policy automation for tickets stored before it existed (no containment is executed retroactively)."""
@@ -211,7 +236,8 @@ class TriageFlow:
     def pending(self, limit: int | None = None) -> list[str]:
         """Alerts without a ticket, most severe rule first, then oldest."""
         sql = (
-            "SELECT alert_id FROM alerts WHERE alert_id NOT IN (SELECT alert_id FROM triage_tickets) ORDER BY "
+            "SELECT alert_id FROM alerts WHERE alert_id NOT IN (SELECT alert_id FROM triage_tickets) "
+            "AND alert_id NOT IN (SELECT alert_id FROM backlog_closed) ORDER BY "
             "CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END, created_at"
         )
         rows = [r[0] for r in self.conn.execute(sql + (f" LIMIT {int(limit)}" if limit else ""))]

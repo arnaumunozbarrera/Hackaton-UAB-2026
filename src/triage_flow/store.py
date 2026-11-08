@@ -64,6 +64,7 @@ def _ticket_row(row: sqlite3.Row) -> dict[str, Any]:
     return out
 
 
+_PENDING = " WHERE t.decision IS NULL AND t.route = 'llm' AND t.alert_id NOT IN (SELECT alert_id FROM backlog_closed)"
 _BASE = (
     "SELECT t.alert_id, t.ticket_json, t.valid, t.errors_json, t.route, t.model, t.verdict, t.severity, t.confidence, "
     "t.escalate, t.attempts, t.elapsed_s, t.created_at, t.decision, t.decision_comment, t.decided_by, t.decided_at, "
@@ -90,8 +91,8 @@ def _rows(conn: sqlite3.Connection, sql: str, params: tuple = ()) -> list[dict[s
 
 
 def queue(conn: sqlite3.Connection, limit: int = 200) -> list[dict[str, Any]]:
-    """Tickets waiting for an operator: no decision yet and not auto-closed. Criticality, then SLA deadline."""
-    return _rows(conn, _BASE + " WHERE t.decision IS NULL AND t.route = 'llm'" + _ORDER + " LIMIT ?", (limit,))
+    """Tickets waiting for an operator: no decision yet, not auto-closed, not in a closed backlog."""
+    return _rows(conn, _BASE + _PENDING + _ORDER + " LIMIT ?", (limit,))
 
 
 def history(conn: sqlite3.Connection, limit: int = 500) -> list[dict[str, Any]]:
@@ -171,7 +172,10 @@ def stats(conn: sqlite3.Connection) -> dict[str, Any]:
         "alerts_pending_triage": one(
             "SELECT COUNT(*) FROM alerts WHERE alert_id NOT IN (SELECT alert_id FROM triage_tickets)"
         ),
-        "awaiting_decision": one("SELECT COUNT(*) FROM triage_tickets WHERE decision IS NULL AND route = 'llm'"),
+        "awaiting_decision": one(
+            "SELECT COUNT(*) FROM triage_tickets WHERE decision IS NULL AND route = 'llm' "
+            "AND alert_id NOT IN (SELECT alert_id FROM backlog_closed)"
+        ),
         "auto_resolved": one("SELECT COUNT(*) FROM triage_tickets WHERE route = 'discriminator'"),
         "escalated": one("SELECT COUNT(*) FROM triage_tickets WHERE escalate = 1"),
         "invalid_tickets": one("SELECT COUNT(*) FROM triage_tickets WHERE valid = 0"),
