@@ -97,39 +97,44 @@ def list_entities(writer: Writer, alert: str, entities: dict) -> None:
                 writer.add("alert_indicators", {"alert_id": alert, "indicator_type": kind, "value": value})
 
 
-def load_alerts(writer: Writer, sources: Sources, directory: Directory, rules: dict[str, dict]) -> None:
-    for source in sources.records("03_alertas/alertas.jsonl"):
-        fields(source, ALERT_FIELDS, "alertas.jsonl")
-        check_rule(source, rules)
-        alert = source["alert_id"]
-        entities = source["entities"]
-        fields(entities, ENTITY_FIELDS, "alert entities")
-        count = users_and_assets(writer, alert, entities, directory)
-        list_entities(writer, alert, entities)
-        if "cloud" in entities:
-            cloud = entities["cloud"]
-            fields(cloud, {"account", "identity", "bucket", "access_key", "new_user"}, "alert cloud")
-            writer.add(
-                "alert_cloud",
-                {
-                    "alert_id": alert,
-                    **{("cloud_account" if key == "account" else key): value for key, value in cloud.items()},
-                },
-            )
-        if "ai_session" in entities:
-            writer.add("alert_ai_sessions", {"alert_id": alert, "session_id": entities["ai_session"]})
-        for position, event in enumerate(source["related_events"]):
-            writer.add("alert_events", {"alert_id": alert, "position": position, "event_id": event})
+def load_alert(writer: Writer, source: dict, directory: Directory, rules: dict[str, dict]) -> None:
+    """Queue one alert and its relations; its related events must already be in `logs`."""
+    fields(source, ALERT_FIELDS, "alertas.jsonl")
+    check_rule(source, rules)
+    alert = source["alert_id"]
+    entities = source["entities"]
+    fields(entities, ENTITY_FIELDS, "alert entities")
+    count = users_and_assets(writer, alert, entities, directory)
+    list_entities(writer, alert, entities)
+    if "cloud" in entities:
+        cloud = entities["cloud"]
+        fields(cloud, {"account", "identity", "bucket", "access_key", "new_user"}, "alert cloud")
         writer.add(
-            "alerts",
+            "alert_cloud",
             {
                 "alert_id": alert,
-                "created_at": timestamp(source["created_at"]),
-                "rule_id": source["rule_id"],
-                "severity": source["severity"],
-                "status": source["status"],
-                "description": source["description"],
-                "evidence_json": source["evidence"],
-                "reported_user_count": count,
+                **{("cloud_account" if key == "account" else key): value for key, value in cloud.items()},
             },
         )
+    if "ai_session" in entities:
+        writer.add("alert_ai_sessions", {"alert_id": alert, "session_id": entities["ai_session"]})
+    for position, event in enumerate(source["related_events"]):
+        writer.add("alert_events", {"alert_id": alert, "position": position, "event_id": event})
+    writer.add(
+        "alerts",
+        {
+            "alert_id": alert,
+            "created_at": timestamp(source["created_at"]),
+            "rule_id": source["rule_id"],
+            "severity": source["severity"],
+            "status": source["status"],
+            "description": source["description"],
+            "evidence_json": source["evidence"],
+            "reported_user_count": count,
+        },
+    )
+
+
+def load_alerts(writer: Writer, sources: Sources, directory: Directory, rules: dict[str, dict]) -> None:
+    for source in sources.records("03_alertas/alertas.jsonl"):
+        load_alert(writer, source, directory, rules)
