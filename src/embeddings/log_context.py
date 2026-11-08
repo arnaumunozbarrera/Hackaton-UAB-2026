@@ -132,6 +132,61 @@ def collect_dataset_candidates(data_dir: str, alert: Mapping[str, Any], max_cand
     return [record for source in sorted(candidates_by_source) for record in candidates_by_source[source]]
 
 
+def collect_dataset_candidates_for_alerts(
+    data_dir: str, alerts: Mapping[str, Mapping[str, Any]], max_candidates: int = 100
+) -> dict[str, list[LogRecord]]:
+    """Collect candidates for many alerts in one pass over the raw sources.
+
+    The index maps alert entity values to alert IDs. Raw events are never retained globally;
+    only bounded per-alert/per-source candidate lists are kept.
+    """
+    value_to_alerts: defaultdict[str, set[str]] = defaultdict(set)
+    for alert_id, alert in alerts.items():
+        for value in _candidate_values(alert):
+            value_to_alerts[value].add(alert_id)
+
+    candidates: dict[str, defaultdict[str, list[LogRecord]]] = {
+        alert_id: defaultdict(list) for alert_id in alerts
+    }
+    for source, spec in SOURCES.items():
+        for event, size in iter_source(Path(data_dir), spec):
+            matched_ids: set[str] = set()
+            for value in _event_strings(event):
+                matched_ids.update(value_to_alerts.get(value, ()))
+            for alert_id in matched_ids:
+                alert = alerts[alert_id]
+                record = LogRecord(event["event_id"], source, spec.template(event), str(spec.entity(event)).lower(), size, event)
+                score, _ = _score(
+                    alert,
+                    record,
+                    parse_ts(str(alert["created_at"])),
+                    _candidate_values(alert),
+                    PRODUCT_SOURCES.get(str(alert.get("source_product", "")).upper(), ()),
+                )
+                if score < 0:
+                    continue
+                bucket = candidates[alert_id][source]
+                bucket.append(record)
+                if len(bucket) > max_candidates * 2:
+                    bucket.sort(
+                        key=lambda item: (
+                            -_score(
+                                alert,
+                                item,
+                                parse_ts(str(alert["created_at"])),
+                                _candidate_values(alert),
+                                PRODUCT_SOURCES.get(str(alert.get("source_product", "")).upper(), ()),
+                            )[0],
+                            item.event_id,
+                        )
+                    )
+                    del bucket[max_candidates:]
+    return {
+        alert_id: [record for source in sorted(by_source) for record in by_source[source]]
+        for alert_id, by_source in candidates.items()
+    }
+
+
 def select_log_context(
     alert: Mapping[str, Any],
     candidates: Iterable[LogRecord],

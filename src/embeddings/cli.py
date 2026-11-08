@@ -8,7 +8,12 @@ import os
 from pathlib import Path
 
 from .canonical import canonical_alert_text, load_alerts
-from .log_context import collect_dataset_candidates, log_context_text, select_log_context
+from .log_context import (
+    collect_dataset_candidates,
+    collect_dataset_candidates_for_alerts,
+    log_context_text,
+    select_log_context,
+)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -19,9 +24,13 @@ def _parser() -> argparse.ArgumentParser:
         ("render", "show canonical alert text"),
         ("context", "select diverse log context for one alert"),
         ("embed", "generate local embeddings"),
+        ("plot", "create an interactive 2D vector-space plot"),
     ):
         command = sub.add_parser(name, help=help_text)
-        command.add_argument("--input", default="docs/03_alertas/alertas_muestra_desarrollo.jsonl")
+        command.add_argument(
+            "--input",
+            default="tmp/alert_embeddings.npz" if name == "plot" else "docs/03_alertas/alertas_muestra_desarrollo.jsonl",
+        )
         command.add_argument("--limit", type=int, default=0, help="0 means all alerts")
         if name == "context":
             command.add_argument("--data", default="docs")
@@ -33,11 +42,26 @@ def _parser() -> argparse.ArgumentParser:
             command.add_argument("--model", default=os.getenv("TARVIA_EMBEDDING_MODEL", "BAAI/bge-m3"))
             command.add_argument("--device", default=os.getenv("TARVIA_EMBEDDING_DEVICE", "cpu"))
             command.add_argument("--batch-size", type=int, default=int(os.getenv("TARVIA_EMBEDDING_BATCH_SIZE", "16")))
+            command.add_argument("--with-context", action="store_true", help="also embed selected log context")
+            command.add_argument("--data", default="docs")
+            command.add_argument("--budget", type=int, default=20)
+            command.add_argument("--per-source", type=int, default=5)
+        if name == "plot":
+            command.add_argument("--alerts", default="docs/03_alertas/alertas.jsonl")
+            command.add_argument("--output", default="tmp/alert_vector_space.html")
+            command.add_argument("--space", choices=("alert", "context"), default="alert")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    if args.command == "plot":
+        from .visualize import create_html
+
+        result = create_html(args.input, args.alerts, args.output, args.space)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0
+
     alerts = list(load_alerts(args.input))
     if args.limit:
         alerts = alerts[: args.limit]
@@ -69,23 +93,65 @@ def main(argv: list[str] | None = None) -> int:
 
     model = SentenceTransformer(args.model, device=args.device)
     texts = [canonical_alert_text(alert) for alert in alerts]
-    vectors = model.encode(texts, batch_size=args.batch_size, normalize_embeddings=True, show_progress_bar=True)
+    alert_vectors = model.encode(texts, batch_size=args.batch_size, normalize_embeddings=True, show_progress_bar=True)
+    context_vectors = None
+    context_counts: list[int] = []
+    if args.with_context:
+        from .log_context import SelectedLog
+
+        alert_map = {alert["alert_id"]: alert for alert in alerts}
+        candidates = collect_dataset_candidates_for_alerts(
+            args.data, alert_map, max_candidates=max(args.budget * 5, 100)
+        )
+        contexts = [
+            select_log_context(alert, candidates[alert["alert_id"]], args.budget, args.per_source)
+            for alert in alerts
+        ]
+        context_texts = [log_context_text(rows) for rows in contexts]
+        context_counts = [len(rows) for rows in contexts]
+        non_empty = [text for text in context_texts if text]
+        if non_empty:
+            non_empty_vectors = model.encode(
+                non_empty, batch_size=args.batch_size, normalize_embeddings=True, show_progress_bar=True
+            )
+            import numpy as np
+
+            context_vectors = np.zeros_like(alert_vectors)
+            position = 0
+            for index, text in enumerate(context_texts):
+                if text:
+                    context_vectors[index] = non_empty_vectors[position]
+                    position += 1
 
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     import numpy as np
 
-    np.savez_compressed(output, alert_ids=np.array([a["alert_id"] for a in alerts]), embeddings=vectors)
+    arrays = {"alert_ids": np.array([a["alert_id"] for a in alerts]), "embeddings": alert_vectors,
+              "alert_embeddings": alert_vectors}
+    if context_vectors is not None:
+        arrays["context_embeddings"] = context_vectors
+        arrays["context_counts"] = np.array(context_counts, dtype=np.int32)
+    np.savez_compressed(output, **arrays)
     manifest = output.with_suffix(".json")
     manifest.write_text(
         json.dumps(
-            {"model": args.model, "device": args.device, "count": len(alerts), "dimensions": int(vectors.shape[1])},
+            {
+                "model": args.model,
+                "device": args.device,
+                "count": len(alerts),
+                "dimensions": int(alert_vectors.shape[1]),
+                "with_context": bool(args.with_context),
+                "context_budget": args.budget if args.with_context else None,
+                "context_per_source": args.per_source if args.with_context else None,
+            },
             ensure_ascii=False,
             indent=2,
         ),
         encoding="utf-8",
     )
-    print(f"Generated {len(alerts)} embeddings ({vectors.shape[1]} dimensions) -> {output}")
+    suffix = " + context embeddings" if args.with_context else ""
+    print(f"Generated {len(alerts)} alert embeddings ({alert_vectors.shape[1]} dimensions){suffix} -> {output}")
     return 0
 
 
