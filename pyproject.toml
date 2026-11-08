@@ -30,18 +30,14 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-# Data-layer scripts written before these rules: compact one-liners accepted until refactored.
-# New modules must not be added here.
-"db/*.py" = ["E701", "E702", "E731", "E741", "E743", "B007", "B023", "B904", "S608", "UP015", "UP028", "UP038"]
-"design/*.py" = ["E701", "E702", "B007", "UP031"]   # one-off diagram generators
 "tests/*.py" = ["S101"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["db"]
+known-first-party = ["src"]
 
 # ---------------------------------------------------------------- Pytest
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
 addopts = "-q"
-markers = ["db: needs the built database (skipped when db/tarvia_soc.sqlite is missing)"]
+markers = ["integration: validates data/tarvia.sqlite when the ingested database exists"]

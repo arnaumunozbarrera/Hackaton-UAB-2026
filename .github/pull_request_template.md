@@ -6,8 +6,8 @@
 
 ## Checklist
 - [ ] `ruff check .` and `ruff format --check .` pass (pre-commit does it)
-- [ ] `pytest` passes; new logic has a test
+- [ ] Applicable tests pass; new logic has a test
 - [ ] No database, `.env`, API key or generated report committed
 - [ ] `docs/` (delivered dataset) not modified
-- [ ] Schema change? `catalog.py` re-run and `catalogo_bd.md` / `schema.sql` updated in this PR
-- [ ] Results reproducible: `scripts/rebuild` run, numbers in the description (incidents / escalations) if they changed
+- [ ] Data-model change? `implementation_docs/trazabilidad_bd.md` reflects the agreed fields, sources and relations
+- [ ] Any implemented data processing is reproducible and its checks are described

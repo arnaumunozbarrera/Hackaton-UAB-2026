@@ -1,0 +1,30 @@
+name: ci
+on:
+  pull_request:
+  push:
+    branches: [main]
+jobs:
+  lint-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements-dev.txt
+      - run: ruff check .
+      - run: ruff format --check .
+      - name: Run tests when present
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import subprocess
+          import sys
+
+          tests = list(Path("tests").rglob("test_*.py")) + list(Path("tests").rglob("*_test.py"))
+          if tests:
+              subprocess.run([sys.executable, "-m", "pytest"], check=True)
+          else:
+              print("No tests defined yet.")
+          PY

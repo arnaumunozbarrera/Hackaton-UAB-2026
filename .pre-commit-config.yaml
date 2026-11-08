@@ -26,6 +26,6 @@ repos:
     hooks:
       - id: forbid-databases
         name: forbid committing database files
-        entry: database files must not be committed (rebuild them with scripts/rebuild)
+        entry: database files must not be committed
         language: fail
         files: \.(sqlite|sqlite3|db)$
