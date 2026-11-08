@@ -16,6 +16,7 @@ from typing import Any
 import numpy as np
 
 from ..embeddings.canonical import canonical_alert_text
+from ..embeddings.vulnerabilities import from_db as known_vulnerabilities
 
 TOP_K = 3
 MIN_SIMILARITY = 0.80
@@ -24,18 +25,20 @@ _lock = threading.Lock()
 
 
 def index_alerts(conn: sqlite3.Connection, alerts: dict[str, dict[str, Any]], encoder: Any, batch: int = 256) -> int:
-    """Embed every alert without a vector for this encoder. Returns how many were added."""
-    have = {r[0] for r in conn.execute("SELECT alert_id FROM alert_embeddings WHERE model = ?", (encoder.name,))}
-    pending = [a for a in sorted(alerts) if a not in have]
+    """Embed every alert whose canonical text has no vector for this encoder or has changed (for example a
+    vulnerability on its host was opened or fixed). Returns how many were (re)embedded."""
+    have = dict(conn.execute("SELECT alert_id, text_hash FROM alert_embeddings WHERE model = ?", (encoder.name,)))
+    vulns = known_vulnerabilities(conn)
+    texts = {a: canonical_alert_text(alerts[a], vulns) for a in alerts}
+    hashes = {a: hashlib.sha1(t.encode("utf-8")).hexdigest() for a, t in texts.items()}
+    pending = [a for a in sorted(alerts) if have.get(a) != hashes[a]]
     for start in range(0, len(pending), batch):
         ids = pending[start : start + batch]
-        texts = [canonical_alert_text(alerts[a]) for a in ids]
-        vectors = encoder.encode(texts).astype(np.float32)
+        vectors = encoder.encode([texts[a] for a in ids]).astype(np.float32)
         conn.executemany(
             "INSERT OR REPLACE INTO alert_embeddings VALUES (?, ?, ?, ?, ?)",
-            [(a, encoder.name, vectors.shape[1], v.tobytes(), hashlib.sha1(t.encode("utf-8")).hexdigest())
-             for a, v, t in zip(ids, vectors, texts, strict=True)],
-        )  # fmt: skip
+            [(a, encoder.name, vectors.shape[1], v.tobytes(), hashes[a]) for a, v in zip(ids, vectors, strict=True)],
+        )
     conn.commit()
     _cache.clear()
     return len(pending)
@@ -69,14 +72,15 @@ def similar_resolved(
     key = (id(conn), model)
     with _lock:
         cached = _cache.get(key)
-        if cached is None or cached[0] != len(resolved):
+        signature = hash(frozenset(resolved))  # set identity, not size: a swap keeps the size but changes the ids
+        if cached is None or cached[0] != signature:
             ids, vectors = [], []
             for a, v in conn.execute("SELECT alert_id, vector FROM alert_embeddings WHERE model = ?", (model,)):
                 if a in resolved:
                     ids.append(a)
                     vectors.append(np.frombuffer(v, dtype=np.float32))
             matrix = np.vstack(vectors) if vectors else np.zeros((0, query.shape[0]), dtype=np.float32)
-            cached = (len(resolved), ids, matrix)
+            cached = (signature, ids, matrix)
             _cache[key] = cached
     _, ids, matrix = cached
     if not ids:
@@ -86,7 +90,7 @@ def similar_resolved(
     rules = dict(conn.execute("SELECT alert_id, rule_id FROM alerts"))
     out = []
     for i in order:
-        if ids[i] == alert_id:
+        if ids[i] == alert_id or ids[i] not in resolved:
             continue
         if scores[i] < min_similarity or len(out) >= k:
             break

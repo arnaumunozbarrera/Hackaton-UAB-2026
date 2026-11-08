@@ -61,3 +61,53 @@ CREATE TABLE IF NOT EXISTS "alert_incidents" (
 
 CREATE INDEX IF NOT EXISTS "idx_alert_log_selection_event" ON "alert_log_selection" ("event_id");
 CREATE INDEX IF NOT EXISTS "idx_triage_tickets_severity" ON "triage_tickets" ("severity", "created_at");
+
+-- Policy automation (src.triage_flow.automation): SLA clock, deterministic policy changes, simulated
+-- notification outbox and containment actions sent to the SOC API.
+CREATE TABLE IF NOT EXISTS "alert_received" (
+  "alert_id" TEXT PRIMARY KEY,
+  "received_at" TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS "ticket_automation" (
+  "alert_id" TEXT PRIMARY KEY,
+  "base_severity" TEXT,
+  "severity_before" TEXT,
+  "severity" TEXT,
+  "sla_minutes" INTEGER,
+  "sla_label" TEXT,
+  "received_at" TEXT,
+  "sla_due_at" TEXT,
+  "escalation_path" TEXT,
+  "escalation_to" TEXT,
+  "reasons_json" TEXT,
+  "changes_json" TEXT,
+  "created_at" TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS "soc_notifications" (
+  "id" INTEGER PRIMARY KEY AUTOINCREMENT,
+  "alert_id" TEXT NOT NULL,
+  "recipient" TEXT NOT NULL,
+  "channel" TEXT,
+  "reason" TEXT,
+  "status" TEXT NOT NULL,
+  "created_at" TEXT NOT NULL,
+  UNIQUE ("alert_id", "recipient")
+);
+
+CREATE TABLE IF NOT EXISTS "soc_actions" (
+  "id" INTEGER PRIMARY KEY AUTOINCREMENT,
+  "alert_id" TEXT NOT NULL,
+  "action" TEXT NOT NULL,
+  "target" TEXT,
+  "mode" TEXT NOT NULL CHECK (mode IN ('auto', 'approved')),
+  "status" TEXT NOT NULL,
+  "reason" TEXT,
+  "detail" TEXT,
+  "approval_token" TEXT,
+  "created_at" TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS "idx_soc_actions_alert" ON "soc_actions" ("alert_id");
+CREATE INDEX IF NOT EXISTS "idx_ticket_automation_due" ON "ticket_automation" ("sla_due_at");

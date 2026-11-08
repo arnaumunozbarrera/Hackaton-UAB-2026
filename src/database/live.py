@@ -17,7 +17,7 @@ from .schema import ROOT
 
 # Every table that holds alerts or results derived from them (children first).
 ALERT_TABLES = (
-    "alert_incidents", "alert_embeddings", "triage_tickets", "alert_log_selection", "alert_dedup", "alert_enriched",
+    "attack_chains", "alert_incidents", "alert_embeddings", "triage_tickets", "alert_log_selection", "alert_dedup", "alert_enriched",
     "alert_history", "alert_users", "alert_assets", "alert_indicators", "alert_files", "alert_processes",
     "alert_customers", "alert_cloud", "alert_ai_sessions", "alert_events", "alerts",
 )  # fmt: skip

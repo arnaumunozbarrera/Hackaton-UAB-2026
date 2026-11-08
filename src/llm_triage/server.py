@@ -20,6 +20,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from ..database import enrich
+from ..investigation.service import ChainService
 from ..prompt_builder import DatasetContextSource, PromptBuilder, PromptConfig
 from ..triage_flow import store
 from .backend import DatasetToolBackend
@@ -54,12 +55,14 @@ class App:
         self.claude_code = None
         self.detail_mode = resolve_detail_mode(detail_mode, mode)
         self.analyses: dict[str, str] = {}  # alert_id -> running analysis job_id
+        self.chains: ChainService | None = None  # attack-chain reconstruction (N2) for escalated alerts
         db_file = enrich.db_path(db)
         if not dataset and db_file.exists():
             from ..triage_flow import TriageFlow
 
             self.flow = TriageFlow(db_file, data_dir, mode, model)
             self.source, self.builder, self.runner = self.flow.source, self.flow.builder, self.flow.runner
+            self.chains = ChainService(db_file, self.flow.conn, self.flow.lock, data_dir, self.detail_mode, model)
             print(f"[llm_triage] modo base de datos: {db_file}")
             return
         self.source = DatasetContextSource(data_dir)
@@ -120,6 +123,7 @@ class App:
             try:
                 out = self.triage(alert_id, note, job["log"], mode=mode, force=force)
                 job.update(status="done", result=out["result"], prompt=out["prompt"], route=out.get("route"))
+                job["chain_job"] = self.auto_chain(alert_id, out["result"].get("ticket"), "triage")
             except Exception as exc:  # surfaced to the UI (login, network, rate limit...)
                 job.update(status="error", error=f"{type(exc).__name__}: {exc}")
                 print(f"[llm_triage] {alert_id}: error {job['error']}", flush=True)
@@ -155,6 +159,7 @@ class App:
             job["done"] += 1
             job["log"].append({"alert_id": out["result"]["alert_id"], "route": out["route"],
                                "verdict": (out["result"]["ticket"] or {}).get("verdict")})  # fmt: skip
+            self.auto_chain(out["result"]["alert_id"], out["result"]["ticket"], "batch")
 
         def work() -> None:
             try:
@@ -164,6 +169,10 @@ class App:
 
         threading.Thread(target=work, daemon=True).start()
         return job_id
+
+    def auto_chain(self, alert_id: str, ticket: dict[str, Any] | None, trigger: str) -> str | None:
+        """Once the triage description exists, escalated alerts get their attack chain reconstructed."""
+        return self.chains.maybe_start(alert_id, ticket, trigger) if self.chains and ticket else None
 
     def job(self, job_id: str) -> dict[str, Any]:
         job = self.jobs[job_id]
@@ -205,6 +214,14 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
             try:
                 if url.path.startswith("/api/") and self._db_get(url.path, qs):
                     return
+                if url.path.startswith("/api/chain"):
+                    if app.chains is None:
+                        self._json(409, {"error": "requiere el modo base de datos"})
+                    elif url.path == "/api/chain-job":
+                        self._json(200, app.chains.job(qs["id"]))
+                    else:
+                        self._json(200, app.chains.get(url.path.rsplit("/", 1)[-1]))
+                    return
                 if url.path in ("/", "/index.html"):
                     self._send(200, (FRONTEND / "index.html").read_bytes(), ASSET_TYPES[".html"])
                 elif url.path == "/chat":
@@ -219,6 +236,7 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                             "model": app.model or "por defecto",
                             "database": app.flow is not None,
                             "detail_mode": app.detail_mode,
+                            "chains": app.chains is not None,
                         },
                     )
                 elif url.path == "/api/alerts":
@@ -255,6 +273,10 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                 elif path == "/api/history":
                     self._json(200, store.history(conn, int(qs.get("limit", 500))))
                 elif path == "/api/stats":
+                    try:
+                        app.flow.sla_sweep()
+                    except Exception:  # noqa: BLE001, S110 - the sweep must never break the dashboard
+                        pass
                     self._json(200, store.stats(conn) | {"live": app.flow.live})
                 else:
                     ticket = store.get_ticket(conn, path.rsplit("/", 1)[-1])
@@ -272,6 +294,11 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                     with app.flow.lock:
                         out = store.decide(app.flow.conn, body["alert_id"], body["decision"],
                                            body.get("comment", ""), body.get("operator", ""))  # fmt: skip
+                    out |= app.flow.after_decision(body["alert_id"], body["decision"], body.get("operator", ""))
+                    if body["decision"] == "escalate" and app.chains is not None:
+                        out["chain_job"] = app.chains.maybe_start(
+                            body["alert_id"], {"escalation": {"escalate": True}}, "operator_escalate"
+                        )
                     self._json(200, out)
                 except KeyError as exc:
                     self._json(404, {"error": f"no encontrado: {exc}"})
@@ -286,6 +313,18 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                     self._json(404, {"error": f"no encontrado: {exc}"})
                 except RuntimeError as exc:
                     self._json(409, {"error": str(exc)})
+                return
+            if path == "/api/chain":
+                if app.chains is None:
+                    self._json(409, {"error": "requiere el modo base de datos"})
+                    return
+                alert_id = str(body.get("alert_id", ""))
+                if alert_id not in app.source.alerts:
+                    self._json(404, {"error": f"no encontrado: {alert_id}"})
+                    return
+                trigger = "open_escalated" if body.get("trigger") == "open_escalated" else "manual"
+                self._json(202, {"job_id": app.chains.start(alert_id, trigger, body.get("mode")),
+                                 "mode": body.get("mode") or app.chains.mode})  # fmt: skip
                 return
             if path == "/api/batch":
                 try:

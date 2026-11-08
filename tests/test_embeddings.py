@@ -4,6 +4,7 @@ import json
 
 from src.embeddings.canonical import canonical_alert_text, load_alerts
 from src.embeddings.log_context import log_context_text, select_log_context
+from src.embeddings.vulnerabilities import from_csv
 from src.log_noise_discard.stages import LogRecord
 
 
@@ -91,3 +92,26 @@ def test_select_log_context_has_per_alert_budget_and_source_diversity():
     assert len(selected) == 2
     assert {row.source for row in selected} == {"edr_events", "dns"}
     assert "dga.example" in log_context_text(selected)
+
+
+def test_known_vulnerabilities_are_added_only_for_affected_hosts(tmp_path):
+    inventory = tmp_path / "02_inventario"
+    inventory.mkdir()
+    (inventory / "vulnerabilidades.csv").write_text(
+        "hostname,id,producto,severidad_cvss,estado,detectada,notas\n"
+        "WS-1,CVE-2025-49704,Google Chrome,8.1,abierta,2026-01-01,nota interna\n"
+        "WS-1,CVE-2021-34527,Print Spooler,8.8,corregida,2021-07-02,parcheado\n",
+        encoding="utf-8",
+    )
+    (inventory / "activos.csv").write_text(
+        "asset_id,hostname,criticality,internet_facing\nA1,WS-1,Alta,False\n", encoding="utf-8"
+    )
+    vulns = from_csv(tmp_path)
+    alert = {"alert_id": "ALR-1", "rule_id": "UC-EDR-002", "entities": {"hosts": [{"hostname": "WS-1"}]}}
+    text = canonical_alert_text(alert, vulns)
+    expected = "known_vulnerabilities: WS-1=CVE-2025-49704 Google Chrome cvss=8.1 criticality=Alta exposure=internal"
+    assert expected in text
+    assert "CVE-2021-34527" not in text  # fixed vulnerabilities are ignored
+    assert "nota interna" not in text  # free-text notes stay out of the vector
+    other = {"alert_id": "ALR-2", "rule_id": "UC-EDR-002", "entities": {"hosts": [{"hostname": "WS-2"}]}}
+    assert canonical_alert_text(other, vulns) == canonical_alert_text(other)

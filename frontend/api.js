@@ -26,7 +26,8 @@
       trigger:`${t.rule_id} · ${t.rule_name}`,evidence:`${t.informative_logs}/${t.cited_logs} informative logs`,
       waitMinutes:mins(t.created_at),detected:fmt(t.alert_created_at),escalate:!!t.escalate,
       affected:[...(aff.hosts||[]),...(aff.business_services||[]),...(aff.users||[])].slice(0,4),
-      recommendation:act?act.action:'—',approvalNeeded:!!(act&&act.requires_approval),reversible:true,ticket:t};
+      recommendation:act?act.action:'—',approvalNeeded:!!(act&&act.requires_approval),reversible:true,ticket:t,
+      sla:t.sla||null,automation:t.automation||{}};
   }
   function toHistory(t,i){
     const k=t.ticket||{},auto=t.route==='discriminator';
@@ -64,6 +65,40 @@
     }catch(e){Object.assign(Live.analysis[a.id],{status:'error',error:e.message});Live.paintAnalysis(a)}
   };
 
+  /* Attack-chain reconstruction (N2): stored report per alert, plus the queued/running job the browser polls. */
+  Live.chain={};  /* alert_id -> {status:'loading'|'none'|'queued'|'running'|'done'|'error', data, job, transcript, elapsed, error, mode} */
+  const pollChain=(a,job_id)=>{
+    const tick=async()=>{
+      let j;try{j=await api('/api/chain-job?id='+job_id)}catch(e){Object.assign(Live.chain[a.id],{status:'error',error:e.message});Live.paintChain&&Live.paintChain(a);return}
+      Object.assign(Live.chain[a.id],{status:j.status,transcript:j.transcript||[],elapsed:j.elapsed_s,error:j.error,mode:j.mode,job:job_id});
+      if(j.status==='queued'||j.status==='running'){Live.paintChain&&Live.paintChain(a);setTimeout(tick,1500);return}
+      if(j.status==='done'){await Live.loadChain(a,true);toast(`${a.id} · attack chain ${j.valid?'reconstructed':'returned with errors'}`)}
+      else Live.paintChain&&Live.paintChain(a);
+    };
+    setTimeout(tick,1000);
+  };
+  Live.loadChain=async function(a,force=false){
+    if(!Live.on||!a||!Live.chains)return;
+    const cur=Live.chain[a.id];if(cur&&!force&&cur.status!=='error')return;
+    Live.chain[a.id]=Object.assign(cur||{},{status:'loading'});
+    try{
+      const d=await api('/api/chain/'+encodeURIComponent(a.id));
+      const job=d.job;
+      if(job&&(job.status==='queued'||job.status==='running')){Object.assign(Live.chain[a.id],{status:job.status,data:d.chain,transcript:job.transcript||[],elapsed:job.elapsed_s,mode:job.mode});Live.paintChain&&Live.paintChain(a);pollChain(a,d.job_id);return}
+      Object.assign(Live.chain[a.id],{status:d.chain?'done':'none',data:d.chain,error:null});
+      Live.paintChain&&Live.paintChain(a);
+      const k=(a.ticket&&a.ticket.ticket)||{};
+      if(!d.chain&&!job&&k.escalation&&k.escalation.escalate)Live.reconstruct(a,'open_escalated');  /* escalated: reconstruct automatically */
+    }catch(e){Object.assign(Live.chain[a.id],{status:'error',error:e.message});Live.paintChain&&Live.paintChain(a)}
+  };
+  Live.reconstruct=async function(a,trigger='manual'){
+    if(!Live.on||!a)return;
+    const cur=Live.chain[a.id]||{};if(cur.status==='queued'||cur.status==='running')return;
+    Live.chain[a.id]=Object.assign(cur,{status:'queued',transcript:[],elapsed:0,error:null});Live.paintChain&&Live.paintChain(a);
+    try{const {job_id,mode}=await post('/api/chain',{alert_id:a.id,trigger});Object.assign(Live.chain[a.id],{job:job_id,mode});pollChain(a,job_id)}
+    catch(e){Object.assign(Live.chain[a.id],{status:'error',error:e.message});Live.paintChain&&Live.paintChain(a)}
+  };
+
   Live.load=async function(){
     try{
       const info=await api('/api/info');
@@ -72,7 +107,7 @@
       const keep=new Map(state.alerts.map(a=>[a.id,a.detail]));
       state.alerts=queue.map(toAlert);state.alerts.forEach(a=>{if(keep.get(a.id))a.detail=keep.get(a.id)});
       history.length=0;hist.forEach((t,i)=>history.push(toHistory(t,i)));
-      Object.assign(Live,{on:true,stats,mode:info.mode,detailMode:info.detail_mode||info.mode,error:null,loadedAt:Date.now()});
+      Object.assign(Live,{on:true,stats,mode:info.mode,detailMode:info.detail_mode||info.mode,chains:!!info.chains,error:null,loadedAt:Date.now()});
     }catch(e){Live.error=e.message||String(e)}
     if(!state.selectedAlert&&!state.selected&&!state.expanded)render();
   };
@@ -80,7 +115,9 @@
   Live.decide=async function(a,action){
     const comment=document.querySelector('#decision-comment')?.value||'';
     if(!Live.on){toast('Backend offline: decision not recorded');return}
-    try{await post('/api/decision',{alert_id:a.id,decision:action,comment,operator:'Paco Gonzalez'});state.selectedAlert=null;toast(`${a.id} · ${DECISION[action]||action}`);await Live.load()}
+    try{const r=await post('/api/decision',{alert_id:a.id,decision:action,comment,operator:'Paco Gonzalez'});state.selectedAlert=null;
+      const acts=(r.actions||[]).filter(x=>x.status!=='manual'),ok=acts.filter(x=>x.status==='ok').length;
+      toast(`${a.id} · ${DECISION[action]||action}${acts.length?` · ${ok}/${acts.length} containment action(s) executed`:''}${r.notified?' · N2 notified':''}`);await Live.load()}
     catch(e){toast(`Decision failed: ${e.message}`)}
   };
   Live.detail=async function(a){

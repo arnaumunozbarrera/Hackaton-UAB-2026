@@ -247,3 +247,156 @@ def test_forced_llm_replaces_discriminator_ticket(flow):
         pytest.skip("no discriminator ticket in this database copy")
     out = flow.triage(auto[0], force_llm=True, mode="mock")
     assert out["route"] == "llm" and store.get_ticket(flow.conn, auto[0])["model"] == "mock"
+
+
+# ------------------------------------------------------------------------------------------------ policy automation
+@pytest.fixture
+def policy():
+    if SCHEMA is None:
+        pytest.skip("docs/ not available")
+    from src.triage_flow.automation import PolicyAutomation
+
+    return PolicyAutomation(ROOT / "docs", auto_containment=True)
+
+
+def auto_db() -> sqlite3.Connection:
+    conn = mini_db()
+    conn.executescript(
+        """
+        CREATE TABLE dim_context (context_key TEXT PRIMARY KEY, reputation TEXT, sandbox_verdict TEXT);
+        CREATE TABLE bridge_alert_entity (alert_id TEXT, entity_type TEXT, entity_value TEXT, context_key TEXT);
+        INSERT INTO detection_rules VALUES ('UC-DLP-002', 'Datos personales', 'DLP', 'Exfiltration', 'RB-09');
+        INSERT INTO detection_rules VALUES ('UC-EML-002', 'Adjunto', 'EMAIL_GW', 'Initial Access', 'RB-01');
+        """
+    )
+    return conn
+
+
+def test_sla_table_is_parsed_from_the_policy(policy):
+    sla = policy.sla
+    assert (sla["critical"].minutes, sla["high"].minutes, sla["medium"].minutes, sla["low"].minutes) == (
+        15,
+        30,
+        240,
+        1440,
+    )
+    assert sla["critical"].notify == ("Responsable SOC", "CISO") and sla["high"].notify == ("Responsable SOC",)
+    assert sla["informational"].minutes == 1440 and sla["low"].notify == ()
+
+
+def test_policy_guard_escalation_approvals_and_notifications(policy):
+    conn = auto_db()
+    add_alert(conn, "A1", [], severity="high", base="medium")
+    conn.execute("UPDATE alerts SET rule_id = 'UC-DLP-002' WHERE alert_id = 'A1'")
+    conn.execute("INSERT INTO alert_received VALUES ('A1', '2026-11-08T08:00:00Z')")
+    ticket = {
+        "verdict": "true_positive",
+        "severity": "critical",
+        "escalation": {"escalate": False},
+        "recommended_actions": [{"action": "deshabilitar cuenta", "target": "ana", "requires_approval": False}],
+    }
+    rec = policy.apply(conn, "A1", ticket)
+    assert ticket["severity"] == "high"  # base medium: at most one level up
+    assert ticket["recommended_actions"][0]["requires_approval"] is True
+    assert ticket["escalation"]["escalate"] and "DPO" in ticket["escalation"]["reason"]
+    assert rec["sla_due_at"] == "2026-11-08T08:30:00Z" and rec["sla_minutes"] == 30
+    assert {n["recipient"] for n in rec["notify"]} == {"Responsable SOC", "DPO"}
+    assert {c["rule"] for c in rec["changes"]} == {"severity_guard", "approval", "escalation"}
+    policy.save(conn, rec)
+    store.save_ticket(conn, "A1", ticket, valid=True, route="llm")
+    row = store.queue(conn)[0]
+    assert row["sla"]["status"] == "breached" or row["sla"]["status"] == "open"
+    assert row["automation"]["base_severity"] == "medium"
+
+
+def test_benign_capped_and_false_positive_not_escalated(policy):
+    conn = auto_db()
+    add_alert(conn, "A1", [], base="high")
+    benign = {"verdict": "benign_true_positive", "severity": "medium", "escalation": {"escalate": False}}
+    policy.apply(conn, "A1", benign)
+    assert benign["severity"] == "low" and not benign["escalation"]["escalate"]
+    fp = {"verdict": "false_positive", "severity": "informational", "escalation": {"escalate": False}}
+    rec = policy.apply(conn, "A1", fp)
+    assert fp["severity"] == "informational" and rec["notify"] == [] and rec["plan"] == []
+
+
+def test_n1_containment_plan_skips_dual_use_and_private(policy):
+    conn = auto_db()
+    add_alert(conn, "A1", [])
+    conn.execute("ALTER TABLE alerts ADD COLUMN evidence_json TEXT")
+    conn.execute("UPDATE alerts SET rule_id = 'UC-EML-002', evidence_json = '{\"message_id\": \"<m1@x>\"}'")
+    for kind, value, rep in (("domain", "evil.example", "malicious"), ("domain", "mega.nz", "malicious"),
+                             ("ip", "10.0.0.5", "malicious"), ("ip", "203.0.113.9", None)):  # fmt: skip
+        conn.execute("INSERT INTO bridge_alert_entity VALUES ('A1', ?, ?, ?)", (kind, value, value))
+        conn.execute("INSERT INTO dim_context VALUES (?, ?, NULL)", (value, rep))
+    rec = policy.apply(conn, "A1", {"verdict": "true_positive", "severity": "low", "escalation": {"escalate": False}})
+    assert [(p["action"], p["target"]) for p in rec["plan"]] == [
+        ("block_ioc", "evil.example"),
+        ("purge_email", "<m1@x>"),
+    ]
+
+
+def test_approved_plan_maps_actions_and_blocks_ot():
+    from src.triage_flow.automation import approved_plan
+
+    plan = approved_plan({"recommended_actions": [
+        {"action": "Aislar el puesto", "target": "WS-1"}, {"action": "Desactivar claves cloud", "target": "AKIA1"},
+        {"action": "Aislar", "target": "PLC-01"}, {"action": "revisar", "target": "analista"}]})  # fmt: skip
+    assert [p["action"] for p in plan] == ["isolate_host", "disable_access_key", "ot", "manual"]
+
+
+def test_resolved_duplicate_joins_the_ticket_without_llm():
+    conn = mini_db()
+    conn.execute("CREATE TABLE alert_dedup (alert_id TEXT PRIMARY KEY, dedup_hash TEXT)")
+    add_alert(conn, "A1", [("N4", "explained:C_escaner_bloqueado", "geoip")])
+    add_alert(conn, "A2", [("kept", "unexplained", None)])
+    conn.executemany("INSERT INTO alert_dedup VALUES (?, 'h1')", [("A1",), ("A2",)])
+    assert discriminator.decide(conn, "A2").route == "llm"  # parent not resolved yet
+    store.save_ticket(conn, "A1", discriminator.decide(conn, "A1").ticket, valid=True, route="discriminator")
+    d = discriminator.decide(conn, "A2")
+    assert d.route == "discriminator" and d.ticket["alert_ids"] == ["A1", "A2"] and d.references == ["A1"]
+
+
+def test_similar_resolved_survives_swap_of_resolved_alerts():
+    """Regression: the matrix cache was keyed by the number of resolved alerts, so invalidating one ticket and
+    validating another in the same cycle kept a stale id and raised KeyError."""
+    import sqlite3
+
+    from src.embeddings.encoder import HashingEncoder
+    from src.triage_flow import similarity
+
+    conn = sqlite3.connect(":memory:")
+    conn.executescript(
+        """CREATE TABLE alerts (alert_id TEXT PRIMARY KEY, rule_id TEXT);
+        CREATE TABLE alert_history (alert_id TEXT, verdict TEXT);
+        CREATE TABLE triage_tickets (alert_id TEXT, verdict TEXT, severity TEXT, valid INTEGER);
+        CREATE TABLE alert_embeddings (alert_id TEXT, model TEXT, dim INTEGER, vector BLOB, text_hash TEXT,
+                                       PRIMARY KEY (alert_id, model));"""
+    )
+    alerts = {f"A{i}": {"alert_id": f"A{i}", "rule_id": "UC-EDR-002", "rule_name": "PowerShell"} for i in range(4)}
+    conn.executemany("INSERT INTO alerts VALUES (?, 'UC-EDR-002')", [(a,) for a in alerts])
+    similarity.index_alerts(conn, alerts, HashingEncoder())
+    conn.executemany("INSERT INTO triage_tickets VALUES (?, 'benign', 'low', 1)", [("A1",), ("A2",)])
+    assert {r["alert_id"] for r in similarity.similar_resolved(conn, "A0")} == {"A1", "A2"}
+    conn.execute("UPDATE triage_tickets SET valid = 0 WHERE alert_id = 'A1'")
+    conn.execute("INSERT INTO triage_tickets VALUES ('A3', 'benign', 'low', 1)")
+    assert {r["alert_id"] for r in similarity.similar_resolved(conn, "A0")} == {"A2", "A3"}
+
+
+def test_sla_breach_notifies_soc_lead_once(policy):
+    from src.triage_flow.automation import BREACH_RECIPIENT, sla_breaches
+
+    conn = auto_db()
+    for aid, decision in (("A1", None), ("A2", "approve")):
+        add_alert(conn, aid, [], base="medium")
+        conn.execute("INSERT INTO alert_received VALUES (?, '2026-11-08T08:00:00Z')", (aid,))
+        ticket = {"verdict": "true_positive", "severity": "medium", "escalation": {"escalate": True, "to": "N2"}}
+        policy.save(conn, policy.apply(conn, aid, ticket))
+        store.save_ticket(conn, aid, ticket, valid=True, route="llm")
+        if decision:
+            conn.execute("UPDATE triage_tickets SET decision = ? WHERE alert_id = ?", (decision, aid))
+    assert sla_breaches(conn, at="2026-11-08T11:59:00Z") == []  # medium: 4 h, not yet due
+    assert sla_breaches(conn, at="2026-11-08T12:01:00Z") == ["A1"]  # decided tickets are not chased
+    assert sla_breaches(conn, at="2026-11-08T13:00:00Z") == []  # notified once
+    sent = conn.execute("SELECT alert_id FROM soc_notifications WHERE recipient = ?", (BREACH_RECIPIENT,)).fetchall()
+    assert sent == [("A1",)]

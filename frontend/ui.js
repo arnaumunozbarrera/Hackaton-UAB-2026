@@ -25,6 +25,18 @@
   const PRIORITY={Critical:'Immediate action',High:'Urgent',Medium:'Normal',Low:'Non-urgent'};
   const SEVCLR={critical:'#e5484d',high:'#f08c2e',medium:'#e9b73b',low:'#2f9e5b',informational:'#7c93a8'};
   const num=n=>Number(n||0).toLocaleString('en-GB');
+  /* SLA (politica_soc.md section 3): deadline computed by the backend, countdown computed here every second. */
+  const dur=ms=>{const m=Math.round(Math.abs(ms)/60000);return m<60?`${m}m`:m<1440?`${Math.floor(m/60)}h ${m%60}m`:`${Math.floor(m/1440)}d ${Math.floor(m%1440/60)}h`};
+  function slaState(sla){
+    if(!sla||!sla.due_at)return null;
+    const due=new Date(sla.due_at).getTime(),total=(sla.minutes||1)*60000;
+    if(sla.closed_at){const ok=new Date(sla.closed_at).getTime()<=due;return {cls:ok?'s-met':'s-breached',text:ok?'SLA met':`SLA missed by ${dur(new Date(sla.closed_at)-due)}`}}
+    const left=due-Date.now();
+    if(left<0)return {cls:'s-breached',text:`SLA breached · ${dur(left)} over`};
+    return {cls:left<total*0.25?'s-warn':'s-open',text:`SLA ${dur(left)} left`};
+  }
+  const slaChip=sla=>{const s=slaState(sla);return s?`<span class="sla ${s.cls}" data-sla='${E(JSON.stringify({due_at:sla.due_at,closed_at:sla.closed_at,minutes:sla.minutes}))}' title="Time to triage: ${E(sla.label)} · due ${E(L.fmt(sla.due_at))}">${s.text}</span>`:''};
+  window.SentinelSla={slaState,slaChip};
   const pct=(a,b)=>b?Math.round(100*a/b):0;
   const greeting=()=>{const h=new Date().getHours();return h<12?'Good morning':h<20?'Good afternoon':'Good evening'};
   const clock=()=>{const d=new Date();const date=d.toLocaleDateString('en-US',{timeZone:'Europe/Madrid',month:'short',day:'numeric',year:'numeric'});const time=d.toLocaleTimeString('en-GB',{timeZone:'Europe/Madrid',hour12:false});return `${date} · ${time} (${d.toLocaleTimeString('en-GB',{timeZone:'Europe/Madrid',timeZoneName:'short'}).split(' ').pop()})`};
@@ -67,10 +79,16 @@
   /* ----------------------------------------------------------------------------------------- approval queue */
   ticket=function(a){
     const sev=a.priority.toLowerCase();
-    return `<article class="ticket sev-${sev}" data-alert="${E(a.id)}" tabindex="0"><div class="ticket-top"><span class="prio ${sev}"><i></i>${PRIORITY[a.priority]}</span><span class="mono">${E(a.id)}</span></div>
+    return `<article class="ticket sev-${sev}" data-alert="${E(a.id)}" tabindex="0"><div class="ticket-top"><span class="prio ${sev}"><i></i>${PRIORITY[a.priority]}</span><span class="ticket-ids">${slaChip(a.sla)}<span class="mono">${E(a.id)}</span></span></div>
       <h4>${E(a.title)}</h4><div class="question"><span>${E(a.question)}</span>${I.right}</div>
-      <div class="ticket-meta"><span>${E(a.category)}</span><span>${E(a.source)}</span><span>${E(a.verdict||'')}</span><span>${a.escalate?'Escalation proposed':a.approvalNeeded?'Approval required':'Pending review'}</span></div>
+      <div class="ticket-meta"><span>${E(a.category)}</span><span>${E(a.source)}</span><span>${E(a.verdict||'')}</span><span>${a.escalate?`Escalation → ${E((a.automation||{}).escalation_to||((a.ticket.ticket||{}).escalation||{}).to||'N2')}`:a.approvalNeeded?'Approval required':'Pending review'}</span></div>
       <div class="ticket-bottom"><span class="risk"><b class="r-${sev}">Risk ${a.risk}/100</b> · ${E(a.trigger)}</span><span class="conf" title="Model confidence">${a.confidence}%</span></div></article>`;
+  };
+  getApprovalList=function(){
+    const rank={Critical:0,High:1,Medium:2,Low:3},q=(state.filter||'').toLowerCase();
+    const due=a=>a.sla&&a.sla.due_at?new Date(a.sla.due_at).getTime():Infinity;
+    return state.alerts.filter(a=>a.status==='Pending'&&(!q||`${a.id} ${a.title} ${a.category} ${a.source}`.toLowerCase().includes(q))&&(state.severity==='All'||a.severity===state.severity))
+      .sort((a,b)=>(rank[a.priority]-rank[b.priority])||(due(a)-due(b))||(b.waitMinutes-a.waitMinutes));
   };
   approval=function(){
     const list=getApprovalList(),pages=Math.max(1,Math.ceil(list.length/QUEUE_PAGE_SIZE));
@@ -81,6 +99,7 @@
     return `<section class="panel queue">${head(I.shield,'green','Operator approval queue','',`<span class="count">${num(list.length)} pending</span>`,'approval')}
       <div class="panel-tools"><label class="search">${I.search}<input id="queue-search" placeholder="Search alerts..." value="${E(state.filter)}"/></label>
       <label class="select"><select id="queue-severity"><option>All priorities</option>${['Critical','High','Medium','Low'].map(x=>`<option value="${x}" ${state.severity===x?'selected':''}>${PRIORITY[x]} · ${x}</option>`).join('')}</select>${I.down}</label>
+      ${(()=>{const n=list.filter(a=>(slaState(a.sla)||{}).cls==='s-breached').length;return n?`<div class="sla-alert"><span class="sla s-breached">${num(n)} SLA breached</span><small>Deadlines from politica_soc.md §3, oldest due first within each priority</small></div>`:''})()}
       <div class="priority-note">${['Critical','High','Medium','Low'].map(x=>`<span class="prio-chip ${x.toLowerCase()}"><i></i>${PRIORITY[x]}</span>`).join('')}</div></div>
       <div class="panel-body">${body}${visible.length?visible.map(ticket).join(''):`<div class="empty">${L.on&&!state.filter&&state.severity==='All'?'The queue is clear: no ticket awaits approval.<br/>Run a triage batch from the Processing monitor.':'No alerts match these filters.'}</div>`}</div>
       <footer class="queue-footer"><span>Showing ${list.length?start+1:0}–${start+visible.length} of ${num(list.length)}</span><span class="queue-pagination"><button data-queue-page="${state.queuePage-1}" ${state.queuePage===1?'disabled':''}>Previous</button>${win.map((p,i)=>`${i&&p-win[i-1]>1?'<span class="gap">…</span>':''}<button data-queue-page="${p}" class="${state.queuePage===p?'current':''}">${p}</button>`).join('')}<button data-queue-page="${state.queuePage+1}" ${state.queuePage===pages?'disabled':''}>Next</button></span></footer></section>`;
@@ -108,6 +127,7 @@
     const kpi=(l,v,d,tone)=>`<div class="kpi ${tone||''}"><span class="kpi-label">${l}</span><span class="kpi-val">${v}</span>${d!=null?`<span class="delta">${d}</span>`:''}</div>`;
     return `<section class="panel">${head(I.trend,'blue','Real-time analytics',`Operational data · ${num(s.alerts_total)} alerts in scope`,'','analytics')}<div class="panel-body">
       <div class="kpis">${kpi('Alerts received',num(s.alerts_total))}${kpi('Triaged',num(s.alerts_triaged),`${pct(s.alerts_triaged,s.alerts_total)}%`)}${kpi('Awaiting approval',num(s.awaiting_decision),null,'warn')}${kpi('Auto-resolved',num(s.auto_resolved),`${pct(s.auto_resolved,s.alerts_triaged)}% of triaged`,'good')}
+      ${kpi('SLA breached',num((s.sla||{}).breached_open),`${num((s.sla||{}).open)} open · ${num((s.sla||{}).met)} met`,(s.sla||{}).breached_open?'bad':'good')}${kpi('Auto containment',num(Object.entries((s.automation||{}).actions||{}).filter(([k])=>k==='auto:ok').reduce((t,[,n])=>t+n,0)),`${num((s.automation||{}).notifications)} notifications`)}
       ${state.expanded==='analytics'?`${kpi('Escalated',num(s.escalated),null,'bad')}${kpi('Needs more info',num((s.by_verdict||{}).needs_more_info))}${kpi('Avg. LLM triage',`${s.avg_triage_seconds||0}s`)}${kpi('Pending triage',num(s.alerts_pending_triage))}`:''}</div>
       <div class="chart-card"><div class="chart-title">Alert volume <span>Daily · UTC</span></div>${lineChart(s.alerts_by_day||{},s.triaged_by_day||{})}<div class="legend"><span><i class="g"></i>Received</span><span><i class="b"></i>Triaged</span></div></div>
       <div class="chart-card"><div class="chart-title">Alert distribution <span>By final ticket severity</span></div>${donut(s.by_severity||{})}</div>
@@ -131,7 +151,7 @@
       <div class="batch"><button class="action primary" data-batch="20" ${running?'disabled':''}>${I.play}Triage next 20</button><button class="action outline" data-batch="100" ${running?'disabled':''}>Next 100</button><span class="mono">${num(s.alerts_pending_triage)} pending · mode ${E(L.mode)}</span></div>
       <div class="log-head"><h4>Automated action log</h4><span class="mono">Newest first</span></div>
       <ul class="timeline">${(liveOn&&(lv.recent||[]).length?lv.recent.slice(0,8).map(r=>`<li><span class="t-time">${E(L.fmt(r.at).split('·').pop().trim())}</span><div><b>${E(r.alert_id)}</b> · ingested → ${E(L.VERDICT[r.verdict]||r.verdict||'—')} · ${E(r.severity||'')}<br/><span class="tag ${r.route==='discriminator'?'t-green':'t-blue'}">${r.route==='discriminator'?'Discriminator':'AI LLM'}</span> <span class="tag t-grey">SOC API</span></div></li>`)
-        :history.slice(0,7).map(h=>{const [t,c]=tag(h);return `<li><span class="t-time">${E((h.time.split('·')[1]||'').trim())}</span><div><b>${E(h.alert)}</b> · ${E(h.action)}<br/><span class="tag ${c}">${t}</span></div></li>`})).join('')||'<li class="empty small">No automated actions yet.</li>'}</ul></div></section>`;
+        :[...((s.automation||{}).recent||[]).slice(0,4).map(r=>`<li><span class="t-time">${E(L.fmt(r.at).split('·').pop().trim())}</span><div><b>${E(r.alert_id)}</b> · ${r.kind==='action'?'Containment':'Notify'} ${E(r.what)}<br/><span class="tag ${/failed|blocked/.test(r.detail)?'t-red':'t-orange'}">Policy automation</span> <span class="tag t-grey">${E(r.detail)}</span></div></li>`),...history.slice(0,4).map(h=>{const [t,c]=tag(h);return `<li><span class="t-time">${E((h.time.split('·')[1]||'').trim())}</span><div><b>${E(h.alert)}</b> · ${E(h.action)}<br/><span class="tag ${c}">${t}</span></div></li>`})]).join('')||'<li class="empty small">No automated actions yet.</li>'}</ul></div></section>`;
   };
 
   /* ----------------------------------------------------------------------------------------- LLM criterion */
@@ -140,6 +160,9 @@
     if(x.type==='contexto')return `<li><span class="tag t-blue">Context request${x.comprobacion?` · ${E(x.comprobacion)}`:''}</span> ${E(x.motivo)}<br/><small class="mono">${E((x.consultas||[]).map(q=>`${q.consulta}(${(q.parametros||[]).join(', ')}) → ${q.filas??'?'} rows`).join(' · '))}</small>${x.is_error?' <span class="tag t-red">rejected</span>':''}</li>`;
     if(x.type==='texto')return `<li><span class="tag t-grey">Reasoning</span> ${E(x.output)}</li>`;
     if(x.type==='ticket')return `<li><span class="tag ${x.errors&&x.errors.length?'t-orange':'t-green'}">Ticket attempt ${E(x.attempt)}</span> ${x.errors&&x.errors.length?E(x.errors.join('; ')):'valid (schema + policy)'}</li>`;
+    if(x.type==='politica')return `<li><span class="tag t-orange">Policy automation</span> ${E(x.output)}</li>`;
+    if(x.type==='semilla')return `<li><span class="tag t-grey">Seed</span> ${E(x.output)}</li>`;
+    if(x.type==='informe')return `<li><span class="tag ${x.errors&&x.errors.length?'t-orange':'t-green'}">Report attempt ${E(x.attempt)}</span> ${x.errors&&x.errors.length?E(x.errors.join('; ')):'valid (N2 schema + database ids)'}</li>`;
     if(x.type==='discriminador')return `<li><span class="tag t-green">Discriminator</span> ${E(x.output)}</li>`;
     return `<li><span class="tag t-grey">${E(x.type)}</span> ${E(x.output||'')}</li>`;
   }
@@ -169,6 +192,66 @@
     document.querySelectorAll('[data-investigation-action]').forEach(b=>{b.disabled=!!busy;b.title=busy?'Wait for the LLM analysis to finish':''});
   }
 
+  /* ----------------------------------------------------------------------------------------- policy automation */
+  const STATUS_TAG={ok:'t-green',failed:'t-red',blocked:'t-red',manual:'t-grey',queued:'t-orange'};
+  function policySection(a){
+    const sla=a.sla,au=a.automation||{},d=a.detail,s=slaState(sla);
+    const changes=(au.changes||[]).map(c=>`<span class="tag t-orange">${E({severity_guard:'Severity guard',approval:'Approval',escalation:'Escalation'}[c.rule]||c.rule)}</span> ${E(c.detail)}`);
+    const notes=d?(d.notifications||[]).map(n=>`<b>${E(n.recipient)}</b> · ${E(n.channel)} — ${E(n.reason)} <span class="tag ${STATUS_TAG[n.status]||'t-grey'}">${E(n.status)}</span>`):null;
+    const acts=d?(d.actions||[]).map(x=>`<span class="tag ${x.mode==='auto'?'t-blue':'t-green'}">${x.mode==='auto'?'Automatic N1':'After approval'}</span> <b>${E(x.action)}</b> → <span class="mono">${E(x.target)}</span> <span class="tag ${STATUS_TAG[x.status]||'t-grey'}">${E(x.status)}</span>${x.status!=='ok'&&x.detail?`<br/><small>${E(x.detail)}</small>`:''}`):null;
+    return `<section class="investigation-section policy-box"><h3>Policy automation <small>deterministic, no LLM</small></h3>
+      ${sla?`<div class="detail-grid"><div><small>SLA status</small>${s?`<span class="sla ${s.cls}" data-sla='${E(JSON.stringify({due_at:sla.due_at,closed_at:sla.closed_at,minutes:sla.minutes}))}'>${s.text}</span>`:'—'}</div><div><small>Time to triage (${E(a.ticket.ticket&&a.ticket.ticket.severity||'')})</small>${E(sla.label)}</div><div><small>Received by the SOC</small><span class="mono">${E(L.fmt(sla.received_at))}</span></div><div><small>Due</small><span class="mono">${E(L.fmt(sla.due_at))}</span></div><div><small>Escalation path (policy §3)</small>${E(sla.escalation_path||'—')}</div><div><small>Escalated to</small>${E(au.escalation_to||'Not escalated')}</div></div>`:'<p class="muted">No SLA record yet: re-run the triage to apply the policy.</p>'}
+      ${(au.reasons||[]).length?`<p><b>Mandatory escalation:</b> ${E(au.reasons.join('; '))}</p>`:''}
+      <h4>Changes applied to the ticket</h4><ul class="ticket-list">${list(changes,'None: the ticket already met the policy')}</ul>
+      <h4>Notifications <small>simulated outbox</small></h4><ul class="ticket-list">${notes?list(notes,'No notification required for this severity and verdict'):'<li class="muted">Loading…</li>'}</ul>
+      <h4>Containment on the SOC API</h4><ul class="ticket-list">${acts?list(acts,'No containment executed'):'<li class="muted">Loading…</li>'}</ul></section>`;
+  }
+
+  /* ----------------------------------------------------------------------------------------- attack chain (N2) */
+  const day=ts=>String(ts||'').slice(0,10);
+  const hhmm=ts=>{const d=new Date(ts);return isNaN(d)?String(ts||''):d.toLocaleTimeString('en-GB',{timeZone:'Europe/Madrid',hour:'2-digit',minute:'2-digit',second:'2-digit'})};
+  const span=(a,b)=>{const ms=new Date(b)-new Date(a);if(!(ms>=0))return '';const h=ms/3600000;return h>=48?`${(h/24).toFixed(1)} days`:h>=1?`${h.toFixed(1)} h`:`${Math.max(1,Math.round(ms/60000))} min`};
+  const chips=(xs,kind)=>(xs||[]).length?(xs||[]).map(x=>`<span class="chain-chip">${E(typeof x==='string'?x:JSON.stringify(x))}<small>${kind}</small></span>`).join(''):'';
+  function chainBody(a,c){
+    const r=c.data.report||{},w=r.window||{},sc=r.scope||{},tl=r.timeline||[];
+    const days=[];tl.forEach(s=>{const d=day(s.timestamp);let g=days.find(x=>x.d===d);if(!g){g={d,steps:[]};days.push(g)}g.steps.push(s)});
+    const step=s=>`<li class="chain-step${s.alert_id===a.id?' focus':''}"><span class="t-time">${E(hhmm(s.timestamp))}</span><div>${s.phase?`<span class="tag t-blue">${E(s.phase)}</span> `:''}${s.mitre?`<span class="tag t-grey">${E(s.mitre)}</span> `:''}${E(s.description)}<br/><small class="mono">${[s.event_id,s.source,s.entity,s.alert_id].filter(Boolean).map(E).join(' · ')}</small></div></li>`;
+    const scope=chips(sc.users,'User')+chips(sc.hosts,'Host');
+    const rel=(r.related_alerts||[]).map(x=>`<span class="mono">${E(x.alert_id)}</span> — ${E(x.relation)}`);
+    const inc=(r.related_incidents||[]).map(x=>`<span class="tag t-orange">${E(x)}</span>`).join(' ');
+    const plan=(r.containment_plan||[]).map(x=>`<b>${E(x.action)}</b> → ${E(x.target)}${x.approver?` <span class="tag t-red">Approver: ${E(x.approver)}</span>`:''}${x.business_impact?`<br/><small>${E(x.business_impact)}</small>`:''}`);
+    const conf=typeof r.confidence==='number'?Math.round(r.confidence*100)+'%':'—';
+    return `<div class="ai-msg ${c.data.valid?'ok':'err'}"><b>${c.data.valid?'Reconstruction valid':'Reconstruction invalid'}</b> · ${E(c.data.model)} · ${E(c.data.attempts)} attempt(s) · ${E(c.data.elapsed_s||0)} s · trigger: ${E(c.data.trigger||'—')} · confidence ${conf}${c.data.valid?'':`<br/>${E((c.data.errors||[]).join('; '))}`}</div>
+      <h4 class="chain-h">${E(r.title||'')} <small class="mono">${E(r.incident_id||'')}</small></h4>
+      <p class="lead">${E(r.attack_summary||'')}</p>
+      <div class="detail-grid chain-origin"><div><small>Patient zero</small><b>${E(r.patient_zero||'—')}</b></div><div><small>Initial access</small>${E(r.initial_access||'—')}</div><div><small>Chain window</small><span class="mono">${E(w.start||'—')} → ${E(w.end||'—')}</span>${w.start&&w.end?`<br/><b>${E(span(w.start,w.end))}</b>`:''}</div><div><small>Root cause</small>${E(r.root_cause||'—')}</div></div>
+      <h4 class="chain-h">Timeline <small>${tl.length} steps · ${days.length} day(s)</small></h4>
+      ${days.map(g=>`<div class="chain-day"><span>${E(g.d)}</span><ul class="timeline chain-tl">${g.steps.map(step).join('')}</ul></div>`).join('')||'<p class="muted">No steps.</p>'}
+      <h4 class="chain-h">Scope</h4><div class="chain-scope">${scope||'<span class="muted">No users or hosts in scope.</span>'}</div>
+      <div class="detail-grid"><div><small>Data</small>${E(sc.data||'—')}</div><div><small>Business impact</small>${E(sc.business_impact||'—')}</div></div>
+      <h4 class="chain-h">Relation to other incidents</h4><p>${inc||'<span class="muted">No related incidents.</span>'}</p><ul class="ticket-list">${list(rel,'No related alerts')}</ul>
+      ${plan.length?`<h4 class="chain-h">Containment plan <small>proposal · requires approval</small></h4><ul class="ticket-list">${list(plan,'')}</ul>`:''}
+      ${(r.detection_gaps||[]).length?`<h4 class="chain-h">Detection gaps</h4><ul class="ticket-list">${list(r.detection_gaps.map(E),'')}</ul>`:''}
+      ${(r.open_questions||[]).length?`<h4 class="chain-h">Open questions</h4><ul class="ticket-list">${list(r.open_questions.map(E),'')}</ul>`:''}
+      <details class="chain-trace"><summary>Investigation trace · ${(c.data.transcript||[]).length} steps</summary><ul class="ai-steps">${(c.data.transcript||[]).map(stepHtml).join('')}</ul></details>
+      <button class="action outline" data-chain>Re-run reconstruction</button>`;
+  }
+  function chainSection(a){
+    const c=L.chain[a.id],k=(a.ticket&&a.ticket.ticket)||{},escalated=!!(k.escalation&&k.escalation.escalate);
+    let body;
+    if(!L.on||!L.chains)body='<p class="muted">Attack-chain reconstruction requires the backend in database mode.</p>';
+    else if(!c||c.status==='loading')body='<p class="muted">Loading…</p>';
+    else if(c.status==='queued'||c.status==='running')body=`<div class="ai-run"><span class="spinner"></span><b>${c.status==='queued'?'Queued':'Reconstructing'} with ${E(MODE_LABEL[c.mode]||c.mode||'')}</b><span class="mono">${E(c.elapsed||0)} s</span></div><ul class="ai-steps">${(c.transcript||[]).map(stepHtml).join('')||'<li class="muted">Reading the triage description and the seed from the database…</li>'}</ul>`;
+    else if(c.status==='error')body=`<div class="ai-msg err"><b>Reconstruction failed.</b> ${E(c.error)}</div><button class="action primary" data-chain>Retry reconstruction</button>`;
+    else if(c.status==='done'&&c.data)body=chainBody(a,c);
+    else body=`<div class="ai-msg warn"><b>${escalated?'Escalated alert without reconstruction yet.':'Not escalated.'}</b> The model starts from the triage description, reads the database (activity over several days, related alerts and incidents, IOC spread) and returns origin, scope, timeline and relation to other incidents.</div><button class="action primary" data-chain>Reconstruct attack chain</button>`;
+    return `<section class="investigation-section ai-box chain-box" id="attack-chain"><h3>Attack chain reconstruction ${escalated?'<span class="tag t-orange">Escalated</span>':''}</h3>${body}</section>`;
+  }
+  L.paintChain=function(a){
+    const box=document.getElementById('attack-chain');
+    if(box&&state.selectedAlert&&state.selectedAlert.id===a.id){const open=box.querySelector('details')?.open;box.outerHTML=chainSection(a);if(open){const d=document.querySelector('#attack-chain details');if(d)d.open=true}}
+  };
+
   /* ----------------------------------------------------------------------------------------- investigation */
   const list=(items,empty)=>items&&items.length?items.map(x=>`<li>${x}</li>`).join(''):`<li class="muted">${empty}</li>`;
   investigation=function(a){
@@ -185,14 +268,16 @@
       <div class="investigation-tags"><span class="prio ${a.priority.toLowerCase()}"><i></i>${E(sev)}</span><span class="tag t-blue">${E(L.VERDICT[k.verdict]||k.verdict)}</span><span class="tag ${t.valid?'t-green':'t-red'}">${t.valid?'Schema + policy valid':'Invalid: '+E((t.errors||[]).join('; '))}</span>${k.escalation&&k.escalation.escalate?'<span class="tag t-orange">Escalation proposed</span>':''}</div></div><button class="close" data-close-investigation aria-label="Close">×</button></div>
       <div class="investigation-body">
       ${aiSection(a)}
+      ${policySection(a)}
       <section class="investigation-section"><h3>Summary</h3><p class="lead">${E(k.summary)}</p><div class="detail-grid"><div><small>Alert created</small><span class="mono">${E(a.detected)}</span></div><div><small>Rule</small>${E(t.rule_id)} · ${E(t.rule_name)}</div><div><small>Source product</small>${E(t.source_product)}</div><div><small>Runbook</small>${E(t.runbook_id)}</div><div><small>Confidence</small><b>${a.confidence}%</b></div><div><small>Model · attempts</small>${E(t.model)} · ${E(t.attempts)}</div></div></section>
-      <section class="investigation-section"><h3>Severity</h3><p>${E(k.severity_rationale||'—')}</p><div class="detail-grid"><div><small>Rule severity</small>${E(t.rule_severity)}</div><div><small>Final severity</small><b class="r-${a.priority.toLowerCase()}">${E(sev)}</b></div></div></section>
+      <section class="investigation-section"><h3>Severity</h3><p>${E(k.severity_rationale||'—')}</p><div class="detail-grid"><div><small>Rule severity</small>${E(t.rule_severity)}</div><div><small>Matrix base (rule × criticality)</small>${E((a.automation||{}).base_severity||'—')}</div>${(a.automation||{}).severity_before&&(a.automation||{}).severity_before!==sev?`<div><small>Proposed before policy guard</small>${E(a.automation.severity_before)}</div>`:''}<div><small>Final severity</small><b class="r-${a.priority.toLowerCase()}">${E(sev)}</b></div></div></section>
       <section class="investigation-section"><h3>Evidence</h3><ul class="ticket-list">${list(ev,'No evidence cited')}</ul></section>
+      ${chainSection(a)}
       <section class="investigation-section"><h3>Affected</h3><div class="systems">${ents.map(([kind,x])=>`<div class="system"><span class="system-dot"></span><div><b>${E(x)}</b><small>${kind}</small></div></div>`).join('')||'<div class="empty small">No affected entities resolved.</div>'}</div></section>
       <section class="investigation-section"><h3>Log selection <small>${E(t.informative_logs)}/${E(t.cited_logs)} informative</small></h3><ul class="ticket-list">${sel?list(sel,'No cited logs'):'<li class="muted">Loading…</li>'}</ul></section>
       <section class="investigation-section"><h3>Pipeline trace</h3><ul class="ticket-list">${steps?list(steps,'Decided with the prompt context, no extra queries'):'<li class="muted">Loading…</li>'}</ul></section>
       ${(k.open_questions||[]).length?`<section class="investigation-section"><h3>Open questions</h3><ul class="ticket-list">${list((k.open_questions||[]).map(E),'')}</ul></section>`:''}
-      <section class="investigation-section recommendation"><h3>Recommended actions</h3><ul class="ticket-list">${list(acts,'No action proposed')}</ul>${k.escalation&&k.escalation.escalate?`<p><b>Escalation</b> → ${E(k.escalation.to)}: ${E(k.escalation.reason)}</p>`:''}<p class="policy-note">The AI only proposes: no action has been executed.</p></section>
+      <section class="investigation-section recommendation"><h3>Recommended actions</h3><ul class="ticket-list">${list(acts,'No action proposed')}</ul>${k.escalation&&k.escalation.escalate?`<p><b>Escalation</b> → ${E(k.escalation.to)}: ${E(k.escalation.reason)}</p>`:''}<p class="policy-note">${d&&(d.actions||[]).some(x=>x.status==='ok')?`Executed on the SOC API: ${(d.actions||[]).filter(x=>x.status==='ok').map(x=>E(x.action+' → '+x.target)).join(' · ')}. Actions that need approval run when you approve.`:'The AI only proposes. Actions that need approval run on the SOC API when you approve; N1 containment (block IOC, purge email) runs automatically for confirmed true positives.'}</p></section>
       </div><div class="investigation-footer"><textarea id="decision-comment" placeholder="Optional justification for your decision..."></textarea><div class="decision-actions"><button class="action secondary" data-investigation-action="investigate">Request more information</button><button class="action outline" data-investigation-action="escalate">Escalate</button><button class="action danger" data-investigation-action="reject">Reject</button><button class="action primary" data-investigation-action="approve">Approve</button></div></div></aside></div>`;
   };
 
@@ -213,14 +298,15 @@
     const x=history.find(h=>h.id===state.selected);if(!x)return '';
     const t=x.ticket||{},k=t.ticket||{};
     return `<div class="drawer-backdrop" data-close><aside class="drawer" role="dialog"><div class="drawer-head"><div><span class="mono">${E(x.id)} · AUDIT INSPECTOR</span><h2>${E(x.alert)}</h2><span class="tag t-green">${E(x.status)}</span></div><button class="close" data-close aria-label="Close">×</button></div>
-      <div class="detail-section"><h4>Ticket</h4><p>${E(k.title||'')}<br/><span class="muted">${E(k.summary||'')}</span></p><div class="detail-grid"><div><small>Verdict</small>${E(L.VERDICT[k.verdict]||k.verdict||'—')}</div><div><small>Severity</small>${E(k.severity||x.severity)}</div><div><small>Confidence</small>${x.confidence}%</div><div><small>Route</small>${t.route==='discriminator'?'Discriminator (no LLM)':'LLM · '+E(t.model||'')}</div></div></div>
+      <div class="detail-section"><h4>Ticket</h4><p>${E(k.title||'')}<br/><span class="muted">${E(k.summary||'')}</span></p><div class="detail-grid"><div><small>Verdict</small>${E(L.VERDICT[k.verdict]||k.verdict||'—')}</div><div><small>Severity</small>${E(k.severity||x.severity)}</div><div><small>Confidence</small>${x.confidence}%</div><div><small>Route</small>${t.route==='discriminator'?'Discriminator (no LLM)':'LLM · '+E(t.model||'')}</div><div><small>SLA</small>${slaChip(t.sla)||'—'}</div><div><small>Escalated to</small>${E((t.automation||{}).escalation_to||'—')}</div></div></div>
       <div class="detail-section"><h4>Decision</h4><div class="detail-grid"><div><small>Decision maker</small>${E(x.maker)}</div><div><small>Action</small>${E(x.action)}</div><div><small>Comment</small>${E(t.decision_comment||'—')}</div><div><small>Time</small><span class="mono">${E(x.time)}</span></div></div></div>
       <div class="detail-section"><h4>Evidence</h4><ul class="ticket-list">${list((k.evidence||[]).map(e=>`<span class="mono">${E(e.event_id||'')}</span> ${E(e.finding||'')}`),'—')}</ul></div></aside></div>`;
   };
 
   /* ----------------------------------------------------------------------------------------- interactions */
   document.addEventListener('click',e=>{
-    const t=e.target.closest('[data-alert]');if(t){const a=state.alerts.find(x=>x.id===t.dataset.alert);if(a)setTimeout(()=>{L.detail(a);autoAnalyze(a);lockDecisions()},0)}
+    const t=e.target.closest('[data-alert]');if(t){const a=state.alerts.find(x=>x.id===t.dataset.alert);if(a)setTimeout(()=>{L.detail(a);autoAnalyze(a);L.loadChain(a);lockDecisions()},0)}
+    if(e.target.closest('[data-chain]')&&state.selectedAlert)L.reconstruct(state.selectedAlert);
     if(e.target.closest('[data-analyze]')&&state.selectedAlert){const note=document.querySelector('#decision-comment')?.value||'';L.analyze(state.selectedAlert,note)}
     const c=e.target.closest('[data-chat-alert]');if(c){const a=state.alerts.find(x=>x.id===c.dataset.chatAlert);if(a)setTimeout(()=>L.detail(a),0)}
     const b=e.target.closest('[data-batch]');if(b&&!b.disabled)L.runBatch(Number(b.dataset.batch));
@@ -237,7 +323,7 @@
     if(!L.on||!a||!a.ticket||(L.detailMode||'mock')==='mock'||L.analysis[a.id])return;
     if(a.ticket.route==='llm'&&a.ticket.model==='mock')L.analyze(a);
   }
-  setInterval(()=>{const c=document.getElementById('sentinel-clock');if(c)c.textContent=clock();const u=document.getElementById('sentinel-updated');if(u)u.textContent=ago()},1000);
+  setInterval(()=>{document.querySelectorAll('[data-sla]').forEach(el=>{try{const s=slaState(JSON.parse(el.dataset.sla));if(s){el.textContent=s.text;el.className='sla '+s.cls}}catch(e){}});const c=document.getElementById('sentinel-clock');if(c)c.textContent=clock();const u=document.getElementById('sentinel-updated');if(u)u.textContent=ago()},1000);
   render();
   L.load();
 })();

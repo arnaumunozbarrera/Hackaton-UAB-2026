@@ -1,11 +1,13 @@
 """End-to-end triage over the database: one object shared by the CLI (src.main) and the web server.
 
 sync (SOC API -> DB) -> enrich -> log selection -> embeddings -> per alert: discriminator | prompt -> LLM
--> validated ticket in triage_tickets.
+-> validated ticket -> policy automation (severity guard, approvals, escalation, SLA, notifications, N1 containment)
+-> triage_tickets.
 """
 
 from __future__ import annotations
 
+import json
 import sys
 import threading
 import time
@@ -18,7 +20,8 @@ from ..llm_triage.client import AnthropicLLM, MockLLM, TriageResult, TriageRunne
 from ..llm_triage.db_backend import DbToolBackend
 from ..llm_triage.validator import validate_ticket
 from ..prompt_builder import DbContextSource, PromptBuilder, PromptConfig
-from . import discriminator, selection, similarity, store
+from . import automation, discriminator, selection, similarity, store
+from .automation import PolicyAutomation
 
 MODES = ("mock", "anthropic", "claude-code")
 
@@ -46,6 +49,8 @@ class TriageFlow:
         self.builder = PromptBuilder(self.source, PromptConfig(data_dir=self.data))
         self.backend = DbToolBackend(self.db_path)
         self.runner = TriageRunner(self.builder, self.backend)
+        self.policy = PolicyAutomation(self.data)
+        self._api = None
         self._claude_code = None
         self.live: dict[str, Any] = {"enabled": False, "interval": 0, "batch": 0, "ticks": 0, "ingested": 0,
                                      "triaged": 0, "last_tick": None, "last_error": None, "recent": []}  # fmt: skip
@@ -56,6 +61,7 @@ class TriageFlow:
         with self.lock:
             t0 = time.monotonic()
             derived = enrich.refresh(self.conn, self.data)
+            derived["sla_clock_started"] = automation.mark_received(self.conn)
             if selection.alerts_without_selection(self.conn):
                 if getattr(self, "_filter", None) is None:
                     from ..log_noise_discard import run_filter
@@ -75,10 +81,87 @@ class TriageFlow:
                 self._encoder = get_encoder()
             encoder = self._encoder
             added = similarity.index_alerts(self.conn, alerts, encoder)
+            derived["automation_backfilled"] = self._backfill()
             out = derived | {"selection": sel, "embeddings_added": added, "encoder": encoder.name,
                              "seconds": round(time.monotonic() - t0, 1)}  # fmt: skip
         self.progress(f"[flow] prepared: {out}")
         return out
+
+    def _backfill(self) -> int:
+        """Policy automation for tickets stored before it existed (no containment is executed retroactively)."""
+        rows = self.conn.execute(
+            "SELECT alert_id, ticket_json FROM triage_tickets WHERE alert_id NOT IN (SELECT alert_id FROM ticket_automation)"
+        ).fetchall()
+        policy = getattr(self, "policy", None) or PolicyAutomation(self.data)
+        for alert_id, raw in rows:
+            ticket = json.loads(raw or "{}")
+            record = policy.apply(self.conn, alert_id, ticket)
+            if record["changes"]:
+                self.conn.execute(
+                    "UPDATE triage_tickets SET ticket_json = ?, severity = ?, escalate = ? WHERE alert_id = ?",
+                    (json.dumps(ticket, ensure_ascii=False), ticket.get("severity"),
+                     int(bool((ticket.get("escalation") or {}).get("escalate"))), alert_id),
+                )  # fmt: skip
+            policy.save(self.conn, record)
+        return len(rows)
+
+    # ------------------------------------------------------------ policy actions
+    @property
+    def api(self):  # noqa: ANN201
+        if self._api is None:
+            from ..soc_api import SocApi
+
+            self._api = SocApi(timeout=5)
+        return self._api
+
+    def run_actions(self, alert_id: str, plan: list[dict[str, Any]], ticket: dict[str, Any] | None, mode: str,
+                    approver: str = "") -> list[dict[str, Any]]:  # fmt: skip
+        """Execute containment actions on the SOC API (network outside the lock) and record each result."""
+        ticket_id = str((ticket or {}).get("ticket_id") or alert_id)
+        out = []
+        for action in plan:
+            if action["action"] == "manual":
+                out.append(
+                    action | {"status": "manual", "detail": "sin acción equivalente en la API: la ejecuta el operador"}
+                )
+                continue
+            if action["action"] == "ot":
+                with self.lock:
+                    out.append(automation.record_action(self.conn, alert_id, action | {"action": "escalate_ot"}, mode,
+                               "blocked", "OT: el SOC solo escala a Operaciones"))  # fmt: skip
+                continue
+            with self.lock:
+                if automation.already_done(self.conn, alert_id, action["action"], action["target"]):
+                    continue
+            status, detail, token = automation.execute(self.api, action, ticket_id, approver)
+            with self.lock:
+                out.append(automation.record_action(self.conn, alert_id, action, mode, status, detail, token))
+        return out
+
+    def after_decision(self, alert_id: str, decision: str, operator: str = "") -> dict[str, Any]:
+        """Approve: run the approved containment on the SOC API. Escalate: notify N2 (simulated outbox)."""
+        with self.lock:
+            row = self.conn.execute("SELECT ticket_json FROM triage_tickets WHERE alert_id = ?", (alert_id,)).fetchone()
+        ticket = json.loads(row[0]) if row else {}
+        if decision == "approve":
+            return {
+                "actions": self.run_actions(alert_id, automation.approved_plan(ticket), ticket, "approved", operator)
+            }
+        if decision == "escalate":
+            with self.lock:
+                self.conn.execute(
+                    "INSERT OR IGNORE INTO soc_notifications (alert_id, recipient, channel, reason, status, created_at) "
+                    "VALUES (?, 'N2', 'correo (simulado)', ?, 'queued', ?)",
+                    (alert_id, f"escalado manual por {operator or 'el operador'}", store.now()),
+                )
+                self.conn.commit()
+            return {"notified": ["N2"]}
+        return {}
+
+    def sla_sweep(self) -> list[str]:
+        """Notify the SOC lead of pending tickets whose SLA deadline has passed (once per alert)."""
+        with self.lock:
+            return automation.sla_breaches(self.conn)
 
     def sync(self, max_alerts: int | None = None) -> dict[str, Any]:
         """Pull new alerts (at most `max_alerts`) and their events from the SOC API, then prepare them."""
@@ -113,6 +196,7 @@ class TriageFlow:
                         entry = {"alert_id": alert_id, "route": res["route"], "verdict": ticket.get("verdict"),
                                  "severity": ticket.get("severity"), "at": store.now()}  # fmt: skip
                         self.live["recent"] = [entry, *self.live["recent"]][:20]
+                    self.sla_sweep()
                     self.live.update(last_tick=store.now(), last_error=None, queue_exhausted=not out["added"])
                 except Exception as exc:  # API down, rate limit...: keep looping
                     self.live.update(last_tick=store.now(), last_error=f"{type(exc).__name__}: {exc}")
@@ -175,9 +259,18 @@ class TriageFlow:
                 result.ticket.setdefault("triage_seconds", result.elapsed_s)
         route = "discriminator" if result.model == "discriminator" else "llm"
         with self.lock:
+            record = self.policy.apply(self.conn, alert_id, result.ticket)
+            entry = {"type": "politica", "output": "; ".join(c["detail"] for c in record["changes"])
+                     or "sin cambios: el ticket ya cumple la política", "sla": record["sla_due_at"]}  # fmt: skip
+            result.transcript.append(entry)
+            if log is not None and log is not result.transcript:
+                log.append(entry)
             store.save_ticket(self.conn, alert_id, result.ticket, valid=result.valid, route=route, model=result.model,
                               errors=result.errors, attempts=result.attempts, usage=result.usage,
                               transcript=result.transcript, elapsed_s=result.elapsed_s)  # fmt: skip
+            self.policy.save(self.conn, record)
+        if result.valid and record["plan"]:
+            self.run_actions(alert_id, record["plan"], result.ticket, "auto")
         print(f"[flow] {alert_id}: route={route} valid={result.valid} verdict="
               f"{(result.ticket or {}).get('verdict')} {result.elapsed_s}s", file=sys.stderr, flush=True)  # fmt: skip
         return {"route": route, "decision_reason": decision.reason, "result": result.to_dict()}

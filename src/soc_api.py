@@ -19,6 +19,11 @@ class SocApi:
         response.raise_for_status()
         return response.json()
 
+    def post(self, path: str, body: dict) -> dict:
+        response = self.session.post(self.base_url + path, json=body, timeout=self.timeout)
+        response.raise_for_status()
+        return response.json()
+
     def alerts(self, status: str = "new", page_size: int = 500) -> Iterator[dict]:
         """Yield every alert in the queue with the given status, page by page."""
         offset = 0

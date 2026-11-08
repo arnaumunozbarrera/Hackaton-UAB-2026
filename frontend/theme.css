@@ -212,3 +212,22 @@ body{background:var(--bg);color:var(--ink);font-family:'DM Sans',system-ui,Arial
   .sx.app:not(.collapsed) .side-bottom{display:block}
   .sx.app:not(.collapsed) .sidebar{padding:26px 14px 22px}
 }
+
+/* SLA chips and policy automation (politica_soc.md sections 3-5) */
+.sla{display:inline-flex;align-items:center;gap:4px;border-radius:999px;padding:2px 8px;font-size:11px;font-weight:700;white-space:nowrap}
+.sla::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
+.sla.s-open{background:var(--blue-l);color:#1d5fc0}.sla.s-warn{background:var(--orange-l);color:#b45f12}
+.sla.s-breached{background:var(--red-l);color:#c0262c}.sla.s-met{background:var(--green-l);color:var(--green-d)}
+.sx .ticket-ids{display:inline-flex;align-items:center;gap:8px;min-width:0;flex-wrap:wrap;justify-content:flex-end}
+.sx .sla-alert{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.sx .sla-alert small{color:var(--muted);font-size:11px}
+.policy-box h4{margin:14px 0 6px;font-size:13px}.policy-box h3 small,.policy-box h4 small{font-weight:500;color:var(--muted);font-size:11.5px}
+.policy-box .ticket-list .tag{margin:0 4px 0 0}
+
+/* Attack-chain reconstruction (N2) */
+.chain-box{background:linear-gradient(180deg,#fff8f1,#fff);border-color:#f6dcc2}
+.chain-h{font-size:12px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);margin:16px 0 8px}.chain-h small{text-transform:none;letter-spacing:0;font-weight:400;margin-left:6px}
+.chain-origin>div{background:#fff;border:1px solid var(--line);border-radius:var(--r-sm);padding:9px 10px}
+.chain-day{margin-bottom:6px}.chain-day>span{display:inline-block;font:600 11px 'IBM Plex Mono',monospace;color:#b45f12;background:var(--orange-l);border-radius:6px;padding:2px 8px;margin-bottom:4px}
+.chain-tl{margin-top:4px}.chain-step.focus{background:#fff4e8;border-radius:6px}.chain-step.focus::before{background:var(--orange)}
+.chain-scope{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}.chain-chip{display:inline-flex;flex-direction:column;border:1px solid var(--line);border-radius:8px;padding:5px 9px;background:#fff;font-size:12px;font-weight:600}.chain-chip small{font-weight:400;color:var(--muted);font-size:10.5px}
+.chain-trace{margin:12px 0 10px;font-size:12px}.chain-trace summary{cursor:pointer;color:var(--muted)}

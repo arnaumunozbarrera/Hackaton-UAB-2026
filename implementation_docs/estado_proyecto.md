@@ -11,6 +11,7 @@ SOC API / docs ─► Gestor BD (build · sync · enrich · live) ─► BD SQLi
   ─► filtro de logs N0–N4 (persistido) ─► discriminador ─┬─► ticket automático (sin LLM)
                                                          └─► embeddings (similares) ─► prompt ─► LLM ⇄ BD (solo lectura)
   ─► validador (esquema + política) ─► triage_tickets ─► front Sentinel (cola por criticidad, decisión) ─► alert_history
+  ─► si se escala: cadena de ataque N2 (LLM ⇄ BD, solo lectura) ─► attack_chains ─► front (sección Attack chain)
 ```
 
 ## Estado por paquete (`src/`)
@@ -24,6 +25,7 @@ SOC API / docs ─► Gestor BD (build · sync · enrich · live) ─► BD SQLi
 | `embeddings/` | ≈ | Vectores por alerta en `alert_embeddings`; alertas similares ya resueltas en el prompt | `bge-m3` solo si `sentence-transformers` está instalado; si no, codificador determinista por hashing |
 | `prompt_builder/` | ✓ | `DbContextSource` (contexto desde la BD) + bloque de alertas similares; el catálogo de 22 consultas funciona sobre vistas reales (ms por consulta) | — |
 | `llm_triage/` | ≈ | `DbToolBackend` (solo lectura), servidor con API para el front (`/api/queue`, `/api/tickets/{id}`, `/api/history`, `/api/stats`, `/api/decision`, `/api/batch`) | Validado con el LLM simulado; falta evaluar calidad, coste y tiempo con Claude real |
+| `investigation/` (nuevo) | ≈ | Reconstrucción de la cadena de ataque (N2) para alertas escaladas: parte del ticket N1, el LLM lee la BD (catálogo de investigación, varios días) y entrega origen, timeline, alcance y relación con otros incidentes; validado contra `informe_incidente.schema.json` y contra los IDs de la BD; tabla `attack_chains`, `/api/chain` y sección en el front | Validado con el LLM simulado; falta evaluarlo con Claude real |
 | `frontend/` | ✓ | Rediseño Sentinel conectado a la API: cola por criticidad, investigación con evidencias y traza, decisiones, histórico, analítica, monitor del pipeline y tiempo real | El asistente IA filtra la cola en local (no llama al LLM) |
 
 ## Cómo ejecutarlo (PowerShell)

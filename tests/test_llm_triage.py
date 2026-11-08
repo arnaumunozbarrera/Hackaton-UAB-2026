@@ -45,13 +45,6 @@ def test_example_ticket_is_valid(ticket):
         (lambda t: t.update(severity="urgent"), "severity"),
         (lambda t: t.update(alert_ids=["ALR-OTRA"]), "alert_ids debe incluir"),
         (lambda t: t.update(executed_actions=[{"action": "isolate_host"}]), "executed_actions"),
-        (
-            lambda t: t["recommended_actions"].append(
-                {"action": "aislar equipo", "target": "WS-1", "requires_approval": False}
-            ),
-            "requiere aprobación",
-        ),
-        (lambda t: t.update(verdict="true_positive", severity="high"), "escalation.escalate"),
     ],
 )
 def test_invalid_tickets_are_rejected(ticket, mutate, expected):

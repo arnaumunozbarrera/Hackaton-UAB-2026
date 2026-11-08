@@ -35,13 +35,32 @@ def save_ticket(conn: sqlite3.Connection, alert_id: str, ticket: dict[str, Any] 
     conn.commit()
 
 
+def sla_status(due: str | None, closed: str | None, at: str | None = None) -> str | None:
+    """open | met | breached. ISO-8601 UTC strings with the same format compare chronologically."""
+    if not due:
+        return None
+    if closed:
+        return "met" if closed <= due else "breached"
+    return "breached" if (at or now()) > due else "open"
+
+
 def _ticket_row(row: sqlite3.Row) -> dict[str, Any]:
     out = dict(row)
     out["ticket"] = json.loads(out.pop("ticket_json") or "{}")
     out["errors"] = json.loads(out.pop("errors_json") or "[]")
-    for key in ("usage_json", "transcript_json"):
+    for key in ("usage_json", "transcript_json", "reasons_json", "changes_json"):
         if key in out:
             out[key[:-5]] = json.loads(out.pop(key) or "null")
+    closed = out.get("decided_at") or (out.get("created_at") if out.get("route") == "discriminator" else None)
+    out["sla"] = None if not out.get("sla_due_at") else {
+        "minutes": out.get("sla_minutes"), "label": out.get("sla_label"), "received_at": out.get("received_at"),
+        "due_at": out.get("sla_due_at"), "closed_at": closed, "status": sla_status(out.get("sla_due_at"), closed),
+        "escalation_path": out.get("escalation_path"),
+    }  # fmt: skip
+    out["automation"] = {
+        "base_severity": out.get("matrix_base_severity"), "severity_before": out.get("severity_before"),
+        "escalation_to": out.get("escalation_to"), "reasons": out.get("reasons") or [], "changes": out.get("changes") or [],
+    }  # fmt: skip
     return out
 
 
@@ -49,14 +68,16 @@ _BASE = (
     "SELECT t.alert_id, t.ticket_json, t.valid, t.errors_json, t.route, t.model, t.verdict, t.severity, t.confidence, "
     "t.escalate, t.attempts, t.elapsed_s, t.created_at, t.decision, t.decision_comment, t.decided_by, t.decided_at, "
     "a.created_at AS alert_created_at, a.rule_id, r.name AS rule_name, r.source_product, r.tactic, r.runbook_id, "
-    "a.severity AS rule_severity, "
+    "a.severity AS rule_severity, ta.sla_minutes, ta.sla_label, ta.received_at, ta.sla_due_at, ta.escalation_path, "
+    "ta.escalation_to, ta.base_severity AS matrix_base_severity, ta.severity_before, ta.reasons_json, ta.changes_json, "
     "(SELECT COUNT(*) FROM alert_log_selection s WHERE s.alert_id = t.alert_id AND s.state IN ('kept','unfiltered')) "
     "AS informative_logs, (SELECT COUNT(*) FROM alert_events e WHERE e.alert_id = t.alert_id) AS cited_logs "
-    "FROM triage_tickets t JOIN alerts a ON a.alert_id = t.alert_id JOIN detection_rules r ON r.rule_id = a.rule_id"
+    "FROM triage_tickets t JOIN alerts a ON a.alert_id = t.alert_id JOIN detection_rules r ON r.rule_id = a.rule_id "
+    "LEFT JOIN ticket_automation ta ON ta.alert_id = t.alert_id"
 )
 _ORDER = (
     " ORDER BY CASE t.severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 "
-    "ELSE 4 END, t.escalate DESC, a.created_at"
+    "ELSE 4 END, COALESCE(ta.sla_due_at, '9999'), t.escalate DESC, a.created_at"
 )
 
 
@@ -69,7 +90,7 @@ def _rows(conn: sqlite3.Connection, sql: str, params: tuple = ()) -> list[dict[s
 
 
 def queue(conn: sqlite3.Connection, limit: int = 200) -> list[dict[str, Any]]:
-    """Tickets waiting for an operator: no decision yet and not auto-closed by the discriminator. Criticality order."""
+    """Tickets waiting for an operator: no decision yet and not auto-closed. Criticality, then SLA deadline."""
     return _rows(conn, _BASE + " WHERE t.decision IS NULL AND t.route = 'llm'" + _ORDER + " LIMIT ?", (limit,))
 
 
@@ -99,6 +120,21 @@ def get_ticket(conn: sqlite3.Connection, alert_id: str) -> dict[str, Any] | None
         for r in conn.execute(
             "SELECT event_id, source, timestamp, state, reason, reference FROM alert_log_selection WHERE alert_id = ? "
             "ORDER BY timestamp",
+            (alert_id,),
+        )
+    ]
+    out["actions"] = [
+        dict(zip(("action", "target", "mode", "status", "reason", "detail", "created_at"), r, strict=True))
+        for r in conn.execute(
+            "SELECT action, target, mode, status, reason, detail, created_at FROM soc_actions WHERE alert_id = ? "
+            "ORDER BY id",
+            (alert_id,),
+        )
+    ]
+    out["notifications"] = [
+        dict(zip(("recipient", "channel", "reason", "status", "created_at"), r, strict=True))
+        for r in conn.execute(
+            "SELECT recipient, channel, reason, status, created_at FROM soc_notifications WHERE alert_id = ? ORDER BY id",
             (alert_id,),
         )
     ]
@@ -159,4 +195,36 @@ def stats(conn: sqlite3.Connection) -> dict[str, Any]:
         ),
         "selection": group("SELECT state, COUNT(*) FROM alert_log_selection GROUP BY 1"),
         "embeddings": one("SELECT COUNT(*) FROM alert_embeddings"),
+        "sla": _sla_stats(conn),
+        "automation": {
+            "tickets_changed": one("SELECT COUNT(*) FROM ticket_automation WHERE changes_json <> '[]'"),
+            "notifications": one("SELECT COUNT(*) FROM soc_notifications"),
+            "actions": group("SELECT mode || ':' || status, COUNT(*) FROM soc_actions GROUP BY 1"),
+            "recent": recent_automation(conn),
+        },
     }
+
+
+def _sla_stats(conn: sqlite3.Connection) -> dict[str, int]:
+    out = {"open": 0, "breached_open": 0, "met": 0, "breached": 0}
+    rows = conn.execute(
+        "SELECT ta.sla_due_at, COALESCE(t.decided_at, CASE WHEN t.route = 'discriminator' THEN t.created_at END) "
+        "FROM ticket_automation ta JOIN triage_tickets t ON t.alert_id = ta.alert_id"
+    )
+    at = now()
+    for due, closed in rows:
+        status = sla_status(due, closed, at)
+        key = {"open": "open", "met": "met"}.get(status or "", "breached" if closed else "breached_open")
+        out[key] += 1
+    return out
+
+
+def recent_automation(conn: sqlite3.Connection, limit: int = 8) -> list[dict[str, Any]]:
+    """Newest automatic policy events: containment actions and notifications."""
+    rows = conn.execute(
+        "SELECT created_at, alert_id, 'action' AS kind, action || ' → ' || COALESCE(target, ''), mode || ' · ' || status "
+        "FROM soc_actions UNION ALL SELECT created_at, alert_id, 'notification', recipient, channel FROM soc_notifications "
+        "ORDER BY 1 DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+    return [dict(zip(("at", "alert_id", "kind", "what", "detail"), r, strict=True)) for r in rows]

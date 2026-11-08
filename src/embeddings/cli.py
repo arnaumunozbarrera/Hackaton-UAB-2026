@@ -14,6 +14,7 @@ from .log_context import (
     log_context_text,
     select_log_context,
 )
+from .vulnerabilities import from_csv as known_vulnerabilities
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -34,6 +35,8 @@ def _parser() -> argparse.ArgumentParser:
             else "docs/03_alertas/alertas_muestra_desarrollo.jsonl",
         )
         command.add_argument("--limit", type=int, default=0, help="0 means all alerts")
+        if name == "render":
+            command.add_argument("--data", default="docs")
         if name == "context":
             command.add_argument("--data", default="docs")
             command.add_argument("--alert-id", default="ALR-20261005-000301")
@@ -69,8 +72,9 @@ def main(argv: list[str] | None = None) -> int:
         alerts = alerts[: args.limit]
 
     if args.command == "render":
+        vulns = known_vulnerabilities(args.data)
         for alert in alerts:
-            print(f"[{alert['alert_id']}]\n{canonical_alert_text(alert)}\n")
+            print(f"[{alert['alert_id']}]\n{canonical_alert_text(alert, vulns)}\n")
         return 0
 
     if args.command == "context":
@@ -113,7 +117,8 @@ def main(argv: list[str] | None = None) -> int:
     from sentence_transformers import SentenceTransformer
 
     model = SentenceTransformer(args.model, device=args.device)
-    texts = [canonical_alert_text(alert) for alert in alerts]
+    vulns = known_vulnerabilities(args.data)
+    texts = [canonical_alert_text(alert, vulns) for alert in alerts]
     alert_vectors = model.encode(texts, batch_size=args.batch_size, normalize_embeddings=True, show_progress_bar=True)
     context_vectors = None
     context_counts: list[int] = []

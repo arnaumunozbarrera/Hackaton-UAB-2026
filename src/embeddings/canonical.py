@@ -7,7 +7,7 @@ the embedding because subjects, prompts, URLs and descriptions can be attacker-c
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -37,8 +37,19 @@ def _entities(alert: dict[str, Any]) -> list[str]:
     return rows
 
 
-def canonical_alert_text(alert: dict[str, Any]) -> str:
-    """Return the controlled text sent to the embedding model."""
+def _hostnames(alert: dict[str, Any]) -> list[str]:
+    hosts = (alert.get("entities") or {}).get("hosts") or []
+    hosts = hosts if isinstance(hosts, list) else [hosts]
+    names = {host.get("hostname") if isinstance(host, dict) else host for host in hosts}
+    return sorted(str(name) for name in names if name)
+
+
+def canonical_alert_text(alert: dict[str, Any], vulnerabilities: Mapping[str, list[str]] | None = None) -> str:
+    """Return the controlled text sent to the embedding model.
+
+    `vulnerabilities` (hostname lower -> open vulnerabilities, see embeddings.vulnerabilities) adds known inventory
+    context for the alerted hosts. Alerts on hosts without open vulnerabilities keep exactly the same text.
+    """
     mitre = alert.get("mitre") or {}
     fields = [
         ("source", alert.get("source_product")),
@@ -54,6 +65,10 @@ def canonical_alert_text(alert: dict[str, Any]) -> str:
     entities = _entities(alert)
     if entities:
         lines.append("entities: " + "; ".join(entities))
+    if vulnerabilities:
+        known = [f"{host}={vuln}" for host in _hostnames(alert) for vuln in vulnerabilities.get(host.lower(), ())]
+        if known:
+            lines.append("known_vulnerabilities: " + "; ".join(known))
     lines.append("related_event_count: " + str(len(alert.get("related_events") or [])))
     return "\n".join(lines)
 
