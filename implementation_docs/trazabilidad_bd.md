@@ -830,3 +830,15 @@ Atributos aprobados: `alert_id` es clave primaria y referencia a `alerts.alert_i
 
 `verdict` es obligatorio y solo admite `true_positive`, `false_positive` o `benign_true_positive`. Esta tabla se alimentará con resultados del triaje, no con clasificaciones preexistentes en los CSV/JSONL. Los tres valores son el dominio permitido, no un recuento de resultados ya generados.
 
+# severity_assessments
+
+Histórico de evaluaciones de severidad generado durante el triaje. `assessment_id` es la clave primaria; `alert_id` referencia `alerts.alert_id`. Una alerta puede tener varias evaluaciones. Se conservan severidad original, criticidad considerada, base de matriz, ajuste, severidad final, veredicto, método, justificación, versión de reglas, huella de política, copia de entradas, intervalo de observación y fecha de evaluación.
+
+El esquema reside en `src/database/pipeline.sql`; no procede de nuevas filas inventadas en los CSV originales. Las evaluaciones se añaden con nuevos triajes válidos. [Campos y reglas de persistencia](severity_audit.md).
+
+# severity_evidence
+
+Evidencias de una evaluación: `evidence_id` es la clave primaria y `assessment_id` referencia `severity_assessments.assessment_id`. Cada fila identifica condición, estado, fuente, clave, referencia, hallazgo y valores observados. Puede referenciar `logs.event_id`, `changes.change_id`, `assets.asset_id` y `business_services.service_id`.
+
+Los estados distinguen condiciones confirmadas, refutadas, desconocidas y no evaluadas. Los vínculos a cambios identifican referencias de contexto; no son por sí solos una prueba completa de autorización. [Detalle del modelo](severity_audit.md).
+

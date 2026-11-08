@@ -15,7 +15,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from ..criticality_scope import load_db_scopes
 from .context import PRODUCT_SERVICES, DatasetContextSource
+from .criticality import load_asset_services
 
 
 @dataclass(frozen=True)
@@ -119,6 +121,8 @@ class DbContextSource(DatasetContextSource):
                 "SELECT name, criticality, asset_references, owner_role FROM business_services"
             )
         }
+        self.asset_services = load_asset_services(c)
+        self._scopes = load_db_scopes(c, self.product_services)
         self.alerts = self._load_alerts()
         self._filter = None
 

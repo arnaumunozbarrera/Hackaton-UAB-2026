@@ -13,6 +13,8 @@ from typing import Any
 
 from jsonschema import Draft202012Validator
 
+from ..severity import SEVERITY_FIELDS
+
 OT_MARKERS = ("plc-", "hmi-", "logistics-ot", " ot ", "red ot")
 
 
@@ -44,5 +46,9 @@ def validate_ticket(ticket: Any, schema: dict[str, Any], alert_id: str) -> list[
 
 
 def tool_schema(schema: dict[str, Any]) -> dict[str, Any]:
-    """Ticket schema usable as a tool input_schema (drops meta keys)."""
-    return {k: v for k, v in schema.items() if k not in ("$schema", "title")}
+    """Model-owned ticket fields only; severity is completed by the server before validation."""
+    output = {k: v for k, v in schema.items() if k not in ("$schema", "title")}
+    output["properties"] = {k: v for k, v in schema["properties"].items() if k not in SEVERITY_FIELDS}
+    output["required"] = [k for k in schema.get("required", []) if k not in SEVERITY_FIELDS]
+    output["additionalProperties"] = False
+    return output

@@ -2,8 +2,8 @@
 
 Why: what politica_soc.md fixes as a rule needs no model judgement, so it is applied by code, the same way for
 discriminator and LLM tickets, and it never costs a repair round with the model:
-1. Severity guard (section 2): the final severity stays within one level of the matrix base; authorised activity
-   (benign_true_positive) is capped at low.
+1. Severity is not touched here: it is server-owned (src.severity, matrix rule severity x criticality) and is
+   frozen in severity_assessments before this step, so the ticket and its assessment always match.
 2. Approvals (section 4): containment actions that need N2 get requires_approval = true.
 3. Mandatory escalation (sections 3 and 5): true_positive high/critical/medium, execution, credential theft,
    persistence, personal data (DPO), fraud, attack chains and OT (Operations).
@@ -29,7 +29,6 @@ from typing import Any
 
 from ..prompt_builder.policy import Policy, load_policy
 
-ORDER = ("informational", "low", "medium", "high", "critical")
 SEVERE = ("high", "critical")
 APPROVAL_KEYWORDS = (
     "aislar", "isolate", "deshabilitar", "disable", "revocar", "revoke", "reset", "restablecer", "contraseña",
@@ -174,30 +173,6 @@ def facts(conn: sqlite3.Connection, alert_id: str) -> Facts:
 
 
 # ------------------------------------------------------------------------------------------------ rules
-def _note(ticket: dict[str, Any], text: str) -> None:
-    base = str(ticket.get("severity_rationale") or "").strip()
-    ticket["severity_rationale"] = f"{base} [Política automática] {text}".strip()
-
-
-def severity_guard(ticket: dict[str, Any], f: Facts) -> list[dict[str, str]]:
-    sev, verdict, base = ticket.get("severity"), ticket.get("verdict"), f.base_severity
-    if sev not in ORDER:
-        return []
-    new = sev
-    if verdict == "benign_true_positive" and sev not in ("informational", "low"):
-        new = "low"
-        why = "actividad autorizada: severidad informational o low (apartado 2)"
-    elif verdict in ("true_positive", "needs_more_info") and base in ORDER:
-        lo, hi = max(0, ORDER.index(base) - 1), min(len(ORDER) - 1, ORDER.index(base) + 1)
-        new = ORDER[min(max(ORDER.index(sev), lo), hi)]
-        why = f"base de la matriz {base}: ajuste máximo ±1 (apartado 2)"
-    if new == sev:
-        return []
-    ticket["severity"] = new
-    _note(ticket, f"severidad {sev} → {new}; {why}.")
-    return [{"rule": "severity_guard", "detail": f"Severidad {sev} → {new}: {why}"}]
-
-
 def approvals(ticket: dict[str, Any]) -> list[dict[str, str]]:
     changes = []
     for action in ticket.get("recommended_actions") or []:
@@ -320,7 +295,6 @@ class PolicyAutomation:
         notify: list[dict[str, str]] = []
         sev_before = ticket.get("severity") if isinstance(ticket, dict) else None
         if isinstance(ticket, dict):
-            changes += severity_guard(ticket, f)
             changes += approvals(ticket)
             reasons, to, extra = escalation(ticket, f, self.sla)
             changes += apply_escalation(ticket, reasons, to)

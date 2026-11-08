@@ -1,0 +1,28 @@
+resource_type,value,target_type,target,source
+source_product,WAF,service,Tienda online y app,docs/01_contexto/empresa_tarvia.md: pila tecnológica Web
+source_product,ECOM,service,Tienda online y app,docs/01_contexto/empresa_tarvia.md: pila tecnológica E-commerce
+source_product,AI_GATEWAY,service,Asistente de compra con IA «Vela»,docs/01_contexto/empresa_tarvia.md: Vela y pila tecnológica IA
+source_product,EMAIL_GW,service,Correo y colaboración (SaaS),docs/01_contexto/empresa_tarvia.md: pila tecnológica Correo; docs/02_inventario/servicios_negocio.csv
+source_product,IDP,service,Identidad y directorio activo,docs/01_contexto/empresa_tarvia.md: pila tecnológica Identidad; docs/02_inventario/servicios_negocio.csv: IdP en la nube
+source_product_asset,VPN,asset,VPN-GW01,docs/01_contexto/empresa_tarvia.md: concentrador VPN; docs/02_inventario/activos.csv: VPN-GW01
+log_source,vpn,asset,VPN-GW01,docs/01_contexto/empresa_tarvia.md: concentrador VPN; docs/02_inventario/activos.csv: VPN-GW01
+log_source,email,service,Correo y colaboración (SaaS),docs/01_contexto/empresa_tarvia.md: pila tecnológica Correo
+log_source,email_clicks,service,Correo y colaboración (SaaS),docs/01_contexto/empresa_tarvia.md: pila tecnológica Correo
+log_source,idp_signins,service,Identidad y directorio activo,docs/01_contexto/empresa_tarvia.md: pila tecnológica Identidad
+log_source,idp_audit,service,Identidad y directorio activo,docs/01_contexto/empresa_tarvia.md: pila tecnológica Identidad
+log_source,ad_events,service,Identidad y directorio activo,docs/01_contexto/empresa_tarvia.md: pila tecnológica Directorio activo
+log_source,waf,service,Tienda online y app,docs/01_contexto/empresa_tarvia.md: pila tecnológica Web
+log_source,ecom_auth,service,Tienda online y app,docs/01_contexto/empresa_tarvia.md: pila tecnológica E-commerce
+log_source,ecom_account,service,Tienda online y app,docs/01_contexto/empresa_tarvia.md: pila tecnológica E-commerce
+log_source,ai_gateway,service,Asistente de compra con IA «Vela»,docs/01_contexto/empresa_tarvia.md: pila tecnológica IA
+cloud_identity,svc_ecom_deploy,asset,CI-RUNNER01,docs/02_inventario/activos.csv: descripción de CI-RUNNER01 identifica la credencial de despliegue AWS
+idp_app,Office 365 Exchange Online,service,Correo y colaboración (SaaS),docs/02_inventario/servicios_negocio.csv: Correo y colaboración SaaS; implementation_docs/trazabilidad_bd.md: idp_signins_logs.app
+idp_app,Microsoft Teams,service,Correo y colaboración (SaaS),docs/02_inventario/servicios_negocio.csv: Correo y colaboración SaaS; implementation_docs/trazabilidad_bd.md: idp_signins_logs.app
+idp_app,SharePoint Online,service,Correo y colaboración (SaaS),docs/02_inventario/servicios_negocio.csv: Correo y colaboración SaaS; implementation_docs/trazabilidad_bd.md: idp_signins_logs.app
+idp_app,Portal del Empleado,service,Nóminas y portal del empleado,docs/02_inventario/servicios_negocio.csv: Nóminas y portal del empleado
+idp_app,ERP Web,service,"ERP: finanzas, compras, stock",docs/02_inventario/servicios_negocio.csv: ERP
+idp_app,Windows (Kerberos),service,Identidad y directorio activo,docs/01_contexto/empresa_tarvia.md: directorio activo
+idp_app,VPN,asset,VPN-GW01,docs/02_inventario/activos.csv: concentrador VPN-GW01
+idp_resource,Portal del Empleado,service,Nóminas y portal del empleado,implementation_docs/trazabilidad_bd.md: idp_audit_logs.target_resource; docs/02_inventario/servicios_negocio.csv
+dlp_channel,email,service,Correo y colaboración (SaaS),implementation_docs/trazabilidad_bd.md: dlp_logs.channel; docs/02_inventario/servicios_negocio.csv
+sql_database,CRM_PROD,service,"CRM y datos de clientes (1,3 M registros, RGPD)",docs/01_contexto/empresa_tarvia.md: auditoría SQL del CRM; implementation_docs/trazabilidad_bd.md: sql_audit_logs.database

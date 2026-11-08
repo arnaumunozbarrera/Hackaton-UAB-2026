@@ -21,6 +21,7 @@ from ..llm_triage.client import AnthropicLLM, MockLLM, TriageResult, TriageRunne
 from ..llm_triage.db_backend import DbToolBackend
 from ..llm_triage.validator import validate_ticket
 from ..prompt_builder import DbContextSource, PromptBuilder, PromptConfig
+from ..severity import assessment_for_ticket
 from . import automation, discriminator, selection, similarity, store
 from .automation import PolicyAutomation
 
@@ -268,6 +269,12 @@ class TriageFlow:
         with self.lock:
             ctx = self.source.get(alert_id)
             decision = discriminator.decide(self.conn, alert_id, ctx)
+            if decision.route == "discriminator" and not force_llm and not note.strip():
+                discriminator_metadata = self.builder.build(alert_id).metadata
+                explained = self.conn.execute(
+                    "SELECT event_id,reason,reference FROM alert_log_selection WHERE alert_id=? AND state='N4' ORDER BY event_id",
+                    (alert_id,),
+                ).fetchall()
         if decision.route == "discriminator" and not force_llm and not note.strip():
             ticket = decision.ticket or {}
             ticket["triage_seconds"] = round(time.monotonic() - started, 3)
@@ -277,6 +284,21 @@ class TriageFlow:
                 log.append(entry)
             result = TriageResult(alert_id, "discriminator", ticket, not errors, errors, 1, [entry], {},
                                   round(time.monotonic() - started, 3))  # fmt: skip
+            if result.valid:
+                result.severity_assessment = assessment_for_ticket(discriminator_metadata, ticket, "discriminator")
+                for eid, reason, reference in explained:
+                    result.severity_assessment["evidence"].append(
+                        {
+                            "condition": "existing_discriminator_context",
+                            "status": "confirmed",
+                            "source": "alert_log_selection",
+                            "source_key": f"{alert_id}:{eid}",
+                            "event_id": eid,
+                            "reference": reference or "contexto",
+                            "finding": reason or "Contexto utilizado por el discriminador existente",
+                            "details": {"reason": reason},
+                        }
+                    )
         else:
             if log is not None:
                 log.append({"type": "discriminador", "output": f"al LLM: {decision.reason}"})
@@ -293,7 +315,8 @@ class TriageFlow:
                 log.append(entry)
             store.save_ticket(self.conn, alert_id, result.ticket, valid=result.valid, route=route, model=result.model,
                               errors=result.errors, attempts=result.attempts, usage=result.usage,
-                              transcript=result.transcript, elapsed_s=result.elapsed_s)  # fmt: skip
+                              transcript=result.transcript, elapsed_s=result.elapsed_s,
+                              severity_assessment=result.severity_assessment)  # fmt: skip
             self.policy.save(self.conn, record)
         if result.valid and record["plan"]:
             self.run_actions(alert_id, record["plan"], result.ticket, "auto")

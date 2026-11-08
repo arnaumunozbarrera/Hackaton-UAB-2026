@@ -192,6 +192,11 @@ def test_pipeline_routes_and_persists(flow):
     assert summary["errors"] == 0 and summary["invalid"] == 0
     assert store.get_ticket(flow.conn, auto)["route"] == "discriminator"
     assert all(store.get_ticket(flow.conn, a)["route"] == "llm" for a in ids)  # high/critical first
+    for aid in ids + [auto]:
+        saved = store.get_ticket(flow.conn, aid)
+        assessment = saved["severity_assessments"][0]
+        assert assessment["final_severity"] == saved["ticket"]["severity"]
+        assert assessment["evidence"] and assessment["input_snapshot"]
     assert flow.conn.execute("SELECT COUNT(*) FROM alert_log_selection").fetchone()[0] > 0
     stats = store.stats(flow.conn)
     assert stats["alerts_triaged"] >= 6 and stats["embeddings"] == stats["alerts_total"]
@@ -245,8 +250,12 @@ def test_forced_llm_replaces_discriminator_ticket(flow):
     auto = flow.conn.execute("SELECT alert_id FROM triage_tickets WHERE route = 'discriminator' LIMIT 1").fetchone()
     if auto is None:
         pytest.skip("no discriminator ticket in this database copy")
+    previous = store.get_ticket(flow.conn, auto[0])["severity_assessments"]
     out = flow.triage(auto[0], force_llm=True, mode="mock")
     assert out["route"] == "llm" and store.get_ticket(flow.conn, auto[0])["model"] == "mock"
+    assessments = store.get_ticket(flow.conn, auto[0])["severity_assessments"]
+    assert len(assessments) == len(previous) + 1 and assessments[1:] == previous
+    assert assessments[0]["method"] == "matrix"
 
 
 # ------------------------------------------------------------------------------------------------ policy automation
@@ -284,37 +293,38 @@ def test_sla_table_is_parsed_from_the_policy(policy):
     assert sla["informational"].minutes == 1440 and sla["low"].notify == ()
 
 
-def test_policy_guard_escalation_approvals_and_notifications(policy):
+def test_policy_escalation_approvals_and_notifications(policy):
     conn = auto_db()
-    add_alert(conn, "A1", [], severity="high", base="medium")
+    add_alert(conn, "A1", [], severity="high", base="high")
     conn.execute("UPDATE alerts SET rule_id = 'UC-DLP-002' WHERE alert_id = 'A1'")
     conn.execute("INSERT INTO alert_received VALUES ('A1', '2026-11-08T08:00:00Z')")
     ticket = {
         "verdict": "true_positive",
-        "severity": "critical",
+        "severity": "high",
+        "severity_rationale": "matriz",
         "escalation": {"escalate": False},
         "recommended_actions": [{"action": "deshabilitar cuenta", "target": "ana", "requires_approval": False}],
     }
     rec = policy.apply(conn, "A1", ticket)
-    assert ticket["severity"] == "high"  # base medium: at most one level up
+    assert ticket["severity"] == "high" and ticket["severity_rationale"] == "matriz"  # server-owned: untouched
     assert ticket["recommended_actions"][0]["requires_approval"] is True
     assert ticket["escalation"]["escalate"] and "DPO" in ticket["escalation"]["reason"]
     assert rec["sla_due_at"] == "2026-11-08T08:30:00Z" and rec["sla_minutes"] == 30
     assert {n["recipient"] for n in rec["notify"]} == {"Responsable SOC", "DPO"}
-    assert {c["rule"] for c in rec["changes"]} == {"severity_guard", "approval", "escalation"}
+    assert {c["rule"] for c in rec["changes"]} == {"approval", "escalation"}
     policy.save(conn, rec)
     store.save_ticket(conn, "A1", ticket, valid=True, route="llm")
     row = store.queue(conn)[0]
     assert row["sla"]["status"] == "breached" or row["sla"]["status"] == "open"
-    assert row["automation"]["base_severity"] == "medium"
+    assert row["automation"]["base_severity"] == "high"
 
 
-def test_benign_capped_and_false_positive_not_escalated(policy):
+def test_policy_keeps_matrix_severity_and_does_not_escalate_benign_or_fp(policy):
     conn = auto_db()
     add_alert(conn, "A1", [], base="high")
-    benign = {"verdict": "benign_true_positive", "severity": "medium", "escalation": {"escalate": False}}
-    policy.apply(conn, "A1", benign)
-    assert benign["severity"] == "low" and not benign["escalation"]["escalate"]
+    benign = {"verdict": "benign_true_positive", "severity": "high", "escalation": {"escalate": False}}
+    rec = policy.apply(conn, "A1", benign)
+    assert benign["severity"] == "high" and not benign["escalation"]["escalate"] and rec["changes"] == []
     fp = {"verdict": "false_positive", "severity": "informational", "escalation": {"escalate": False}}
     rec = policy.apply(conn, "A1", fp)
     assert fp["severity"] == "informational" and rec["notify"] == [] and rec["plan"] == []

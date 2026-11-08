@@ -10,6 +10,8 @@ TriageRunner.run()  ── Messages API (Anthropic) ──►  tipo 2: el LLM pi
         │                                              └─ DatasetToolBackend responde desde docs/ (luego, la BD)
         │                                           tipo 1: el LLM entrega el ticket llamando a emitir_ticket
         ▼
+apply_matrix_severity()  incorpora la severidad y su explicación calculadas en código
+        ▼
 validate_ticket()  esquema (Draft 2020-12) + reglas de política → si falla, se devuelve el error al LLM (máx. 2 correcciones)
         ▼
 TriageResult: ticket, valid, errors, attempts, transcript (consultas hechas), usage (tokens), elapsed_s
@@ -28,8 +30,10 @@ Reglas del tipo 2 (`context_requests.py`):
 - Los errores de una consulta concreta vuelven al modelo sin anular el resto de la petición.
 
 ## Formato siempre igual
-- El ticket solo puede llegar como entrada de la herramienta `emitir_ticket`, cuyo `input_schema` es
-  `ticket_salida.schema.json`.
+- El ticket solo puede llegar como entrada de la herramienta `emitir_ticket`. Su esquema deriva de
+  `ticket_salida.schema.json`, excluyendo `severity` y `severity_rationale`: esos campos los completa el sistema
+  con el resultado de la matriz antes de validar. El modelo recibe la severidad como contexto para el escalado,
+  pero no la calcula, ajusta ni justifica. Los adaptadores API y Claude Code aplican la misma regla.
 - `validator.py` comprueba además: `alert_ids` incluye la alerta; aislar, deshabilitar, revocar, resetear o desactivar
   claves tienen `requires_approval=true`; sobre OT solo se escala; `executed_actions` está vacío; un true_positive
   high o critical se escala.

@@ -7,6 +7,7 @@ the output schema travels as `response_schema` and the SQL stays in the executor
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta
@@ -15,14 +16,15 @@ from string import Template
 from typing import Any
 
 from .context import AlertContext, ContextSource
-from .policy import Policy, load_policy, most_critical
+from .criticality import assess_criticality
+from .policy import Policy, load_policy
 from .runbooks import DEFAULT_PROFILE, PROFILES, Runbook, RunbookProfile, load_runbooks
 from .schema import BASE_QUERIES, QUERIES, SchemaMap
 from .templates import SYSTEM_TEMPLATE, USER_TEMPLATE
 from .tools import TOOL_NAME, tool_definition
 
 UNTRUSTED_CLOSE = "</datos_no_confiables>"
-GENERIC_QUERIES = ("log_detail", "user_profile", "asset_profile", "indicator", "severity_matrix")
+GENERIC_QUERIES = ("log_detail", "user_profile", "asset_profile", "indicator")
 MAX_ENTITY_VALUES = 10
 
 
@@ -109,9 +111,13 @@ class PromptBuilder:
         ctx_dir = self.cfg.data_dir / "01_contexto"
         self.runbooks: dict[str, Runbook] = load_runbooks(ctx_dir / "runbooks")
         self.policy: Policy = load_policy(ctx_dir / "politica_soc.md")
+        self.policy_hash = hashlib.sha256((ctx_dir / "politica_soc.md").read_bytes()).hexdigest()
         self.output_schema = json.loads((ctx_dir / "ticket_salida.schema.json").read_text(encoding="utf-8"))
         self.system = Template(self.cfg.system_template).substitute(
-            company=self.cfg.company, language=self.cfg.language, tool=TOOL_NAME, policy=self.policy.compact()
+            company=self.cfg.company,
+            language=self.cfg.language,
+            tool=TOOL_NAME,
+            policy=self.policy.compact(numbers=("3", "4", "5", "6")),
         )
 
     # ------------------------------------------------------------ identifiers and functions
@@ -175,17 +181,16 @@ class PromptBuilder:
         return "; ".join(items) or "sin entidades resueltas (usa alert_entities)"
 
     def _severity(self, ctx: AlertContext) -> dict[str, str]:
-        crit = most_critical([h.criticality for h in ctx.hosts] + [s.criticality for s in ctx.services])
-        origin = "activo o servicio más crítico"
-        if crit is None:
-            crit = "Alta" if any(u.vip or u.privileged for u in ctx.users) else "Media"
-            origin = "sin activo: VIP o privilegiada = Alta, resto = Media"
-        flags = [f"{u.user_key} VIP o privilegiada" for u in ctx.users if u.vip or u.privileged]
-        flags += [f"{u.user_key} RRHH {u.hr_event}" for u in ctx.users if u.hr_event]
+        assessment = assess_criticality(
+            [(h.hostname, h.criticality) for h in ctx.hosts],
+            [(s.name, s.criticality) for s in ctx.services],
+        )
+        crit, origin = assessment.level, assessment.origin
+        base = self.policy.base_severity(ctx.rule_severity, crit) or "no calculable"
         return {
-            "base_severity": self.policy.base_severity(ctx.rule_severity, crit) or "no calculable",
+            "base_severity": base,
             "matrix_row": self.policy.row(ctx.rule_severity), "criticality": crit, "criticality_origin": origin,
-            "severity_flags": "; ".join(flags) or "sin factores detectados en la identificación",
+            "severity_rationale": f"Matriz SOC: regla {ctx.rule_severity} × criticidad {crit} = {base}. Origen: {origin}. Sin ajustes.",
         }  # fmt: skip
 
     def _runbook(self, ctx: AlertContext, prof: RunbookProfile) -> dict[str, str]:
@@ -256,7 +261,18 @@ class PromptBuilder:
         } | severity | self._runbook(ctx, prof) | self._logs(ctx) | self._similar(ctx)  # fmt: skip
         user = Template(self.cfg.user_template).substitute(values)
         meta = {"rule_id": ctx.rule_id, "informative_logs": len(ctx.informative_logs),
+                "alert_id": ctx.alert_id,
+                "rule_severity": ctx.rule_severity, "matrix_row": severity["matrix_row"], "policy_hash": self.policy_hash,
                 "set_aside": {k: len(v) for k, v in ctx.set_aside.items()}, "base_severity": severity["base_severity"],
+                "criticality": severity["criticality"], "criticality_origin": severity["criticality_origin"],
+                "severity_rationale": severity["severity_rationale"],
+                "criticality_inputs": {
+                    "assets": [{"hostname": h.hostname, "criticality": h.criticality} for h in ctx.hosts],
+                    "services": [{"name": s.name, "criticality": s.criticality} for s in ctx.services],
+                    "identities": [{"user_key": u.user_key, "vip": u.vip, "privileged": u.privileged} for u in ctx.users],
+                    "unknown_hosts": ctx.unknown_hosts, "unknown_users": ctx.unknown_users,
+                    "relations": ctx.criticality_relations, "unresolved_relations": ctx.unresolved_relations,
+                },
                 "similar_alerts": ctx.similar_alerts,
                 "chars": {"system": len(self.system), "user": len(user)}}  # fmt: skip
         return PromptPackage(
