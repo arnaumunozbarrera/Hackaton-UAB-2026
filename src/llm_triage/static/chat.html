@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tarvia SOC · Triaje N1 con LLM (temporal)</title>
+<style>
+  :root { --bg:#f6f7f9; --panel:#fff; --line:#dfe3e8; --text:#1d2430; --muted:#6b7480; --accent:#2f5bd3;
+          --ok:#1f7a4d; --bad:#b3261e; --warn:#a15c00; --code:#f1f3f6; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; color:var(--text); background:var(--bg);
+         height:100vh; display:grid; grid-template-rows:auto 1fr; }
+  header { display:flex; gap:12px; align-items:center; padding:10px 16px; background:var(--panel); border-bottom:1px solid var(--line); }
+  header h1 { font-size:15px; margin:0; font-weight:600; }
+  .pill { font-size:12px; padding:2px 8px; border-radius:999px; background:var(--code); color:var(--muted); }
+  main { display:grid; grid-template-columns:minmax(0,1.15fr) minmax(0,1fr); min-height:0; }
+  #chat { display:grid; grid-template-rows:auto 1fr auto; min-height:0; border-right:1px solid var(--line); }
+  #examples { padding:8px 16px; display:flex; gap:6px; flex-wrap:wrap; border-bottom:1px solid var(--line); background:var(--panel); }
+  #examples button { font-size:12px; border:1px solid var(--line); background:#fff; border-radius:6px; padding:3px 8px; cursor:pointer; }
+  #messages { overflow:auto; padding:16px; display:flex; flex-direction:column; gap:12px; }
+  .msg { max-width:100%; border-radius:10px; padding:10px 12px; border:1px solid var(--line); background:var(--panel); }
+  .msg.user { align-self:flex-end; background:#e9effd; border-color:#c9d6f7; max-width:80%; }
+  .msg.error { border-color:var(--bad); color:var(--bad); }
+  .msg h3 { margin:0 0 6px; font-size:15px; }
+  .row { display:flex; gap:6px; flex-wrap:wrap; margin:4px 0 8px; }
+  .badge { font-size:12px; padding:2px 8px; border-radius:6px; background:var(--code); }
+  .badge.ok { background:#e2f3ea; color:var(--ok); } .badge.bad { background:#fbe5e3; color:var(--bad); }
+  .badge.sev-critical, .badge.sev-high { background:#fbe5e3; color:var(--bad); }
+  .badge.sev-medium { background:#fff1dc; color:var(--warn); }
+  .section-title { font-size:12px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); margin:10px 0 4px; }
+  table { border-collapse:collapse; width:100%; font-size:13px; }
+  td, th { border:1px solid var(--line); padding:4px 6px; text-align:left; vertical-align:top; }
+  ul { margin:4px 0; padding-left:18px; }
+  pre { margin:0; background:var(--code); border:1px solid var(--line); border-radius:6px; padding:8px; white-space:pre-wrap;
+        word-break:break-word; font:12px/1.4 ui-monospace, SFMono-Regular, Consolas, monospace; }
+  details summary { cursor:pointer; color:var(--accent); margin-top:8px; }
+  form { display:grid; grid-template-columns:220px 1fr auto; gap:8px; padding:12px 16px; background:var(--panel); border-top:1px solid var(--line); }
+  input, button.primary { font:inherit; padding:8px 10px; border:1px solid var(--line); border-radius:8px; }
+  button.primary { background:var(--accent); color:#fff; border-color:var(--accent); cursor:pointer; }
+  button.primary:disabled { opacity:.6; cursor:wait; }
+  aside { display:grid; grid-template-rows:auto 1fr; min-height:0; background:var(--panel); }
+  .tabs { display:flex; gap:2px; padding:8px 8px 0; border-bottom:1px solid var(--line); flex-wrap:wrap; }
+  .tabs button { border:1px solid transparent; border-bottom:none; background:none; padding:6px 10px; cursor:pointer; color:var(--muted);
+                 border-radius:6px 6px 0 0; font-size:13px; }
+  .tabs button.active { border-color:var(--line); background:var(--panel); color:var(--text); position:relative; top:1px; }
+  #tab-body { overflow:auto; padding:12px; display:flex; flex-direction:column; gap:10px; }
+  .kv { display:grid; grid-template-columns:150px 1fr; gap:4px 10px; font-size:13px; }
+  .kv div:nth-child(odd) { color:var(--muted); }
+  .muted { color:var(--muted); font-size:12px; }
+  .call { border:1px solid var(--line); border-radius:8px; padding:8px; }
+  .call.err { border-color:var(--bad); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Tarvia SOC · Triaje N1 con LLM</h1>
+  <span class="pill" id="mode">cargando...</span>
+  <span class="pill">página temporal · solo local</span>
+</header>
+<main>
+  <section id="chat">
+    <div id="examples"><span class="muted">Ejemplos por runbook:</span></div>
+    <div id="messages">
+      <div class="msg"><p class="muted">Escribe un alert_id (o elige un ejemplo) y, si quieres, una indicación para el analista virtual.
+      El panel derecho muestra el prompt, la herramienta de lectura, las consultas que hace el LLM y la validación del formato.</p></div>
+    </div>
+    <form id="form">
+      <input id="alert" list="alert-list" placeholder="ALR-20261005-000172" autocomplete="off" required>
+      <datalist id="alert-list"></datalist>
+      <input id="note" placeholder="Indicación opcional (p. ej. céntrate en si hubo accesos correctos)">
+      <button class="primary" id="send" type="submit">Triar</button>
+    </form>
+  </section>
+  <aside>
+    <div class="tabs" id="tabs"></div>
+    <div id="tab-body"><p class="muted">Selecciona una alerta para ver el contexto con el que se enriquece la respuesta.</p></div>
+  </aside>
+</main>
+<script>
+"use strict";
+// All data from the backend is rendered with textContent: alert fields and logs can contain attacker text.
+const $ = (id) => document.getElementById(id);
+function el(tag, props = {}, ...children) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(props)) {
+    if (k === "class") node.className = v; else if (k === "text") node.textContent = v; else node.setAttribute(k, v);
+  }
+  for (const c of children.flat()) if (c != null) node.append(c instanceof Node ? c : document.createTextNode(String(c)));
+  return node;
+}
+const pre = (v) => el("pre", { text: typeof v === "string" ? v : JSON.stringify(v, null, 2) });
+async function getJSON(url, opts) {
+  const r = await fetch(url, opts); const data = await r.json();
+  if (!r.ok) throw new Error(data.error || r.statusText); return data;
+}
+
+let state = { prompt: null, result: null, tab: "contexto" };
+const TABS = [["contexto", "Contexto"], ["sistema", "Sistema"], ["herramienta", "Herramienta y consultas"],
+              ["llamadas", "Llamadas del LLM"], ["esquema", "Esquema de salida"], ["uso", "Uso y validación"]];
+
+function renderTabs() {
+  const bar = $("tabs"); bar.replaceChildren();
+  for (const [id, label] of TABS) {
+    const b = el("button", { class: id === state.tab ? "active" : "", type: "button", text: label });
+    b.onclick = () => { state.tab = id; renderTabs(); renderSidebar(); }; bar.append(b);
+  }
+}
+
+function kv(obj) {
+  const box = el("div", { class: "kv" });
+  for (const [k, v] of Object.entries(obj)) box.append(el("div", { text: k }), el("div", { text: typeof v === "object" ? JSON.stringify(v) : String(v) }));
+  return box;
+}
+
+function renderSidebar() {
+  const body = $("tab-body"); body.replaceChildren();
+  const p = state.prompt, r = state.result;
+  if (!p) { body.append(el("p", { class: "muted", text: "Sin alerta seleccionada." })); return; }
+  if (state.tab === "contexto") {
+    body.append(el("div", { class: "section-title", text: "Metadatos del paquete" }), kv(p.metadata));
+    body.append(el("div", { class: "section-title", text: `Mensaje de usuario (${p.user.length} caracteres)` }));
+    for (const line of p.user.split("\n").filter(Boolean)) body.append(pre(line));
+  } else if (state.tab === "sistema") {
+    body.append(el("div", { class: "section-title", text: `Mensaje de sistema (${p.system.length} caracteres, cacheable)` }), pre(p.system));
+  } else if (state.tab === "herramienta") {
+    body.append(el("div", { class: "section-title", text: "Definición enviada al LLM" }), pre(p.tool));
+    body.append(el("div", { class: "section-title", text: "SQL que ejecutará la BD por cada función (no va en el prompt)" }));
+    for (const q of p.queries) body.append(el("div", { class: "call" }, el("b", { text: q.name }), " ",
+      el("span", { class: "muted", text: `(${q.params.join(", ")}) · ejemplo ${JSON.stringify(q.example)}` }), pre(q.sql)));
+  } else if (state.tab === "llamadas") {
+    if (!r) { body.append(el("p", { class: "muted", text: "Aún no se ha enviado la alerta al LLM." })); return; }
+    r.transcript.forEach((s, i) => {
+      const box = el("div", { class: "call" + (s.is_error || (s.errors && s.errors.length) ? " err" : "") });
+      box.append(el("b", { text: `${i + 1}. ${s.type}` }));
+      if (s.input) box.append(pre(s.input));
+      if (s.output) box.append(pre(s.output));
+      if (s.errors) box.append(el("div", { class: "muted", text: s.errors.length ? "Errores: " + s.errors.join(" | ") : "Ticket válido" }));
+      body.append(box);
+    });
+  } else if (state.tab === "esquema") {
+    body.append(el("div", { class: "section-title", text: "ticket_salida.schema.json (input_schema de emitir_ticket)" }), pre(p.response_schema));
+  } else if (state.tab === "uso") {
+    if (!r) { body.append(el("p", { class: "muted", text: "Aún no se ha enviado la alerta al LLM." })); return; }
+    body.append(kv({ modelo: r.model, válido: r.valid, intentos_ticket: r.attempts, segundos: r.elapsed_s }));
+    body.append(el("div", { class: "section-title", text: "Tokens" }), kv(r.usage));
+    body.append(el("div", { class: "section-title", text: "Errores de validación" }),
+      r.errors.length ? el("ul", {}, r.errors.map((e) => el("li", { text: e }))) : el("p", { text: "Ninguno" }));
+  }
+}
+
+function ticketCard(r) {
+  const t = r.ticket || {};
+  const card = el("div", { class: "msg" });
+  card.append(el("h3", { text: t.title || "(sin título)" }));
+  card.append(el("div", { class: "row" },
+    el("span", { class: "badge " + (r.valid ? "ok" : "bad"), text: r.valid ? "FORMATO VÁLIDO" : "FORMATO NO VÁLIDO" }),
+    el("span", { class: "badge", text: `veredicto: ${t.verdict ?? "?"}` }),
+    el("span", { class: "badge sev-" + (t.severity || ""), text: `severidad: ${t.severity ?? "?"}` }),
+    el("span", { class: "badge", text: `confianza: ${t.confidence ?? "?"}` }),
+    el("span", { class: "badge", text: `escalar: ${t.escalation?.escalate ? "sí → " + (t.escalation.to || "N2") : "no"}` }),
+    el("span", { class: "badge", text: r.model })));
+  if (!r.valid) card.append(el("ul", {}, r.errors.map((e) => el("li", { class: "muted", text: e }))));
+  if (t.summary) card.append(el("div", { class: "section-title", text: "Resumen" }), el("p", { text: t.summary }));
+  if (t.severity_rationale) card.append(el("div", { class: "section-title", text: "Severidad" }), el("p", { text: t.severity_rationale }));
+  if (t.evidence?.length) card.append(el("div", { class: "section-title", text: "Evidencias" }),
+    el("ul", {}, t.evidence.map((e) => el("li", { text: `${e.event_id || ""} [${e.source || ""}] ${e.finding || ""}` }))));
+  if (t.recommended_actions?.length) {
+    const tb = el("table", {}, el("tr", {}, ["Acción", "Objetivo", "Aprobación", "Justificación"].map((h) => el("th", { text: h }))));
+    for (const a of t.recommended_actions) tb.append(el("tr", {}, [a.action, a.target, a.requires_approval ? "requiere" : "no", a.justification || ""].map((v) => el("td", { text: v }))));
+    card.append(el("div", { class: "section-title", text: "Acciones recomendadas" }), tb);
+  }
+  if (t.open_questions?.length) card.append(el("div", { class: "section-title", text: "Preguntas abiertas" }),
+    el("ul", {}, t.open_questions.map((q) => el("li", { text: q }))));
+  card.append(el("details", {}, el("summary", { text: "JSON del ticket" }), pre(t)));
+  return card;
+}
+
+async function loadPrompt(alertId) {
+  try { state.prompt = await getJSON(`/api/prompt?alert_id=${encodeURIComponent(alertId)}`); state.result = null; renderSidebar(); }
+  catch (e) { state.prompt = null; $("tab-body").replaceChildren(el("p", { class: "muted", text: e.message })); }
+}
+
+$("alert").addEventListener("change", (e) => loadPrompt(e.target.value.trim()));
+$("form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const alertId = $("alert").value.trim(), note = $("note").value.trim();
+  if (!alertId) return;
+  $("messages").append(el("div", { class: "msg user", text: `Triaje de ${alertId}${note ? " · " + note : ""}` }));
+  const waiting = el("div", { class: "msg muted", text: "Analizando: construyendo el prompt, consultando datos y validando el ticket..." });
+  $("messages").append(waiting); $("send").disabled = true;
+  try {
+    const { job_id } = await getJSON("/api/triage", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ alert_id: alertId, note }) });
+    state.result = { transcript: [], usage: {}, errors: [], model: "", valid: false, attempts: 0, elapsed_s: 0 };
+    state.tab = "llamadas"; renderTabs();
+    for (;;) {
+      await new Promise((ok) => setTimeout(ok, 1500));
+      let job;
+      try { job = await getJSON(`/api/job?id=${job_id}`); } catch (pollErr) { continue; }  // transient: retry
+      const calls = job.transcript.filter((s) => s.type === "consulta").length;
+      waiting.textContent = `Analizando (${job.elapsed_s} s): ${calls} consultas, ${job.transcript.filter((s) => s.type === "ticket").length} intentos de ticket...`;
+      state.result = Object.assign(state.result, { transcript: job.transcript }); renderSidebar();
+      if (job.status === "done") { state.prompt = job.prompt; state.result = job.result; waiting.replaceWith(ticketCard(job.result)); renderSidebar(); break; }
+      if (job.status === "error") throw new Error(job.error);
+    }
+  } catch (err) { waiting.replaceWith(el("div", { class: "msg error", text: "Error: " + err.message })); }
+  finally { $("send").disabled = false; $("messages").scrollTop = $("messages").scrollHeight; }
+});
+
+(async function init() {
+  renderTabs();
+  try {
+    const info = await getJSON("/api/info");
+    const labels = { mock: "modo MOCK (sin LLM)", "claude-code": "Claude Code CLI · suscripción", anthropic: "API de Anthropic" };
+    $("mode").textContent = `${labels[info.mode] || info.mode} · modelo ${info.model}`;
+    const alerts = await getJSON("/api/alerts");
+    for (const a of alerts) {
+      $("alert-list").append(el("option", { value: a.alert_id, text: `${a.rule_id} ${a.rule_name}` }));
+      const b = el("button", { type: "button", text: `${a.runbook} · ${a.rule_id}` });
+      b.title = `${a.alert_id} · ${a.rule_name} · ${a.informative} logs informativos`;
+      b.onclick = () => { $("alert").value = a.alert_id; loadPrompt(a.alert_id); };
+      $("examples").append(b);
+    }
+  } catch (e) { $("mode").textContent = "error: " + e.message; }
+})();
+</script>
+</body>
+</html>

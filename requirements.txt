@@ -3,3 +3,6 @@ tzdata>=2024.1          # IANA time zones for zoneinfo (required on Windows)
 fastapi>=0.110          # mock SOC API (docs/06_herramientas/mock_soc_api.py)
 uvicorn>=0.29
 requests>=2.31
+anthropic>=0.40          # LLM stage (src/llm_triage)
+jsonschema>=4.18         # ticket validation (Draft 2020-12)
+claude-agent-sdk>=0.2      # LLM stage via local Claude Code CLI with plan login (--claude-code)
