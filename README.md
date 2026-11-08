@@ -1,66 +1,65 @@
-# Hackathon UAB 2026 · Tarvia SOC - AI-assisted L1 triage
+# Hackathon UAB 2026 · Tarvia SOC
 
-Deloitte Cyber AI challenge: a system that triages every alert of the Tarvia SOC, correlates alerts into incidents,
-reconstructs attack chains and proposes containment, with a human approving every action.
-Challenge brief and dataset: [`docs/README.md`](docs/README.md).
+Proyecto de triaje de alertas de ciberseguridad para el reto de Deloitte Cyber AI.
+El contexto del reto y los datos originales están en [docs/README.md](docs/README.md).
 
-## Repository structure
-```
-Hackaton-UAB-2026/
-├── docs/                 Delivered dataset + challenge docs (READ-ONLY: never edit)
-│   ├── 01_contexto/      company, SOC policy, runbooks, output schemas
-│   ├── 02_inventario/    CMDB, directory, HR, changes, vulnerabilities
-│   ├── 03_alertas/       SIEM alerts
-│   ├── 04_logs/          raw logs (18 sources)
-│   ├── 05_inteligencia/  TIP, GeoIP, sandbox
-│   └── 06_herramientas/  mock SOC API (FastAPI)
-├── db/                   Data layer (single SQLite database, hybrid schema)
-│   ├── build_db.py       load the dataset -> converts to the hybrid schema
-│   ├── migrate_hybrid.py 21 source tables + compatibility views + documents
-│   ├── l2_correlate.py   L2: authorised activity, severity matrix, correlation into incidents
-│   ├── l3_reconstruct.py L3: attack-chain reconstruction, incident reports
-│   ├── catalog.py        generates catalogo_bd.md + schema.sql
-│   ├── catalogo_bd.md    data dictionary (generated, versioned)
-│   ├── schema.sql        DDL (generated, versioned)
-│   └── README.md         layers and rebuild order
-├── design/               architecture and data-model diagrams
-├── scripts/              setup, rebuild and mock-API helpers (.ps1 Windows / .sh Linux-macOS)
-├── tests/                pytest (unit tests + database contract tests)
-├── .github/              CI (ruff + pytest) and PR template
-├── pyproject.toml        ruff + pytest configuration
-└── requirements*.txt     runtime / development dependencies
-```
-Not versioned (rebuilt locally): `db/tarvia_soc.sqlite` (~1.2 GB), `db/reports/`, `db/enterprise-attack.json`, `.venv/`, `.env`.
+El modelo de datos acordado está en [implementation_docs/trazabilidad_bd.md](implementation_docs/trazabilidad_bd.md).
+El esquema SQLite está en [src/database/schema.sql](src/database/schema.sql) y la ingesta en `src/database/`.
 
-## Quick start
-Requirements: Python 3.10+ and Git.
+## Estructura
 
-**Windows (PowerShell)**
+- `docs/`: datos originales, contexto, política SOC y herramientas del reto. No modificar.
+- `implementation_docs/`: diseño acordado y CSV derivados de relaciones.
+- `src/database/`: esquema, carga y validación del modelo acordado.
+- `data/`: base SQLite e informe de ingesta locales; no se versionan.
+- `tests/`: pruebas de conversión, integridad e ingesta.
+- `scripts/`: preparación del entorno y arranque de la API simulada.
+- `.github/`: comprobaciones de formato, análisis estático y pruebas cuando existan.
+
+## Entorno de desarrollo
+
+Python 3.10+ y Git.
+
+Windows:
+
 ```powershell
-git clone https://github.com/arnaumunozbarrera/Hackaton-UAB-2026.git
-cd Hackaton-UAB-2026
-powershell -ExecutionPolicy Bypass -File scripts\setup.ps1   # .venv + dependencies + pre-commit + MITRE bundle
+powershell -ExecutionPolicy Bypass -File scripts\setup.ps1
 .\.venv\Scripts\Activate.ps1
-scripts\rebuild.ps1                                          # builds db\tarvia_soc.sqlite (~3 min)
-pytest
 ```
-**Linux / macOS / Git Bash**
+
+Linux, macOS o Git Bash:
+
 ```bash
-git clone https://github.com/arnaumunozbarrera/Hackaton-UAB-2026.git && cd Hackaton-UAB-2026
-bash scripts/setup.sh && source .venv/bin/activate
-bash scripts/rebuild.sh
-pytest
+bash scripts/setup.sh
+source .venv/bin/activate
 ```
-Mock SOC API (containment with approval tokens): `scripts\mock_api.ps1` or `bash scripts/mock_api.sh` -> http://127.0.0.1:8000/docs
 
-## Pipeline
-`alerts + logs -> DB manager (load, similarity, incident grouping) -> discriminator -> prompt builder -> LLM -> validator -> front end (human approval) -> containment API`
+API simulada: `scripts/mock_api.ps1` o `bash scripts/mock_api.sh`.
+Su documentación está disponible en `http://127.0.0.1:8000/docs` al arrancarla.
 
-| Level | Where | Output |
-|---|---|---|
-| L1 triage data | `db/build_db.py`, `db/migrate_hybrid.py` | 21 source tables, every record with its original JSON |
-| L2 correlation | `db/l2_correlate.py` | `resultado_alerta`, `fact_incident`, `bridge_alert_incident` |
-| L3 investigation | `db/l3_reconstruct.py` | `fact_attack_step`, report fields, `db/reports/*.json` |
+Consulta [CONTRIBUTING.md](CONTRIBUTING.md) antes de contribuir.
 
-## Contributing
-Read [`CONTRIBUTING.md`](CONTRIBUTING.md) before the first commit: branches, commit format, code rules and review.
+## Crear y cargar la base de datos
+
+```bash
+python -m src.database.build
+```
+
+Genera `data/tarvia.sqlite` y `data/tarvia.ingestion.json`. También se puede usar
+`scripts/create_db.ps1` o `bash scripts/create_db.sh`.
+
+La carga utiliza los originales de `docs/` y los tres CSV derivados de `implementation_docs/`.
+Crea 56 tablas, carga las 18 fuentes de logs y las alertas, y deja `alert_history` vacía hasta el triaje.
+Antes de publicar la base comprueba las claves, la integridad, las cantidades de valores únicos del diseño
+y que los archivos de entrada no hayan cambiado. Las anomalías de origen se conservan y figuran en el informe.
+
+Una base existente no se sustituye salvo que se indique `--replace` de forma explícita.
+Ese modo reconstruye también el histórico: no debe utilizarse para incorporar resultados de triaje.
+
+Validación del código y de la base cargada:
+
+```bash
+pytest
+ruff check .
+ruff format --check .
+```

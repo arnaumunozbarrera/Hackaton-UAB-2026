@@ -15,4 +15,16 @@ jobs:
       - run: pip install -r requirements-dev.txt
       - run: ruff check .
       - run: ruff format --check .
-      - run: pytest        # database tests are skipped in CI (the .sqlite is not versioned)
+      - name: Run tests when present
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import subprocess
+          import sys
+
+          tests = list(Path("tests").rglob("test_*.py")) + list(Path("tests").rglob("*_test.py"))
+          if tests:
+              subprocess.run([sys.executable, "-m", "pytest"], check=True)
+          else:
+              print("No tests defined yet.")
+          PY

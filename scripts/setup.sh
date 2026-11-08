@@ -14,9 +14,4 @@ $VPY -m pre_commit install
 
 [ -f .env ] || cp .env.example .env
 
-MITRE=db/enterprise-attack.json
-if [ ! -f "$MITRE" ]; then
-  echo "Downloading MITRE ATT&CK Enterprise bundle..."
-  curl -fsSL -o "$MITRE" https://raw.githubusercontent.com/mitre/cti/master/enterprise-attack/enterprise-attack.json
-fi
-echo "Setup done. Activate with: source .venv/bin/activate   then build with: bash scripts/rebuild.sh"
+echo "Setup done. Activate with: source .venv/bin/activate"

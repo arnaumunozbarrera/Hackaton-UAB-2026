@@ -14,9 +14,4 @@ if (-not (Test-Path .venv)) { Invoke-Expression "$py -m venv .venv" }
 
 if (-not (Test-Path .env)) { Copy-Item .env.example .env }
 
-$mitre = "db\enterprise-attack.json"
-if (-not (Test-Path $mitre)) {
-    Write-Host "Downloading MITRE ATT&CK Enterprise bundle..."
-    Invoke-WebRequest "https://raw.githubusercontent.com/mitre/cti/master/enterprise-attack/enterprise-attack.json" -OutFile $mitre
-}
-Write-Host "Setup done. Activate with: .\.venv\Scripts\Activate.ps1   then build with: scripts\rebuild.ps1"
+Write-Host "Setup done. Activate with: .\.venv\Scripts\Activate.ps1"

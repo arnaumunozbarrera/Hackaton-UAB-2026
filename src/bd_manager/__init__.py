@@ -1,1 +1,0 @@
-"""Modular database manager implementations."""
