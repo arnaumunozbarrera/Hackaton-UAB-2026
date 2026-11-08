@@ -218,3 +218,32 @@ def test_live_copy_keeps_logs_and_drops_alerts(tmp_path):
     assert live.execute("SELECT COUNT(*) FROM triage_tickets").fetchone()[0] == 0
     with pytest.raises(FileExistsError):
         create_live(source, out)
+
+
+def test_detail_mode_resolution(monkeypatch):
+    from src.llm_triage import server
+
+    assert server.resolve_detail_mode("claude-code", "mock") == "claude-code"
+    assert server.resolve_detail_mode("auto", "anthropic") == "anthropic"
+    monkeypatch.setattr(server.importlib.util, "find_spec", lambda name: None)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    assert server.resolve_detail_mode("auto", "mock") == "mock"
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "x")
+    assert server.resolve_detail_mode("auto", "mock") == "anthropic"
+    with pytest.raises(ValueError):
+        server.resolve_detail_mode("gpt", "mock")
+
+
+def test_claude_code_runner_has_context_budget():
+    from src.llm_triage.claude_code import ClaudeCodeRunner
+
+    assert ClaudeCodeRunner(None, None).max_context_requests == 6
+
+
+@pytest.mark.integration
+def test_forced_llm_replaces_discriminator_ticket(flow):
+    auto = flow.conn.execute("SELECT alert_id FROM triage_tickets WHERE route = 'discriminator' LIMIT 1").fetchone()
+    if auto is None:
+        pytest.skip("no discriminator ticket in this database copy")
+    out = flow.triage(auto[0], force_llm=True, mode="mock")
+    assert out["route"] == "llm" and store.get_ticket(flow.conn, auto[0])["model"] == "mock"

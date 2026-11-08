@@ -133,19 +133,24 @@ class TriageFlow:
         rows = [r[0] for r in self.conn.execute(sql + (f" LIMIT {int(limit)}" if limit else ""))]
         return rows
 
-    def _llm_result(self, alert_id: str, note: str, log: list[dict[str, Any]] | None) -> TriageResult:
-        if self.mode == "claude-code":
+    def _llm_result(
+        self, alert_id: str, note: str, log: list[dict[str, Any]] | None, mode: str | None = None
+    ) -> TriageResult:
+        mode = mode or self.mode
+        if mode not in MODES:
+            raise ValueError(f"unknown mode {mode}")
+        if mode == "claude-code":
             if self._claude_code is None:
                 from ..llm_triage.claude_code import ClaudeCodeRunner
 
                 ClaudeCodeRunner.ensure_subscription_auth()
                 self._claude_code = ClaudeCodeRunner(self.builder, self.backend, self.model)
             return self._claude_code.run(alert_id, analyst_note=note, log=log)
-        llm = MockLLM(self.builder.build(alert_id)) if self.mode == "mock" else AnthropicLLM(self.model)
+        llm = MockLLM(self.builder.build(alert_id)) if mode == "mock" else AnthropicLLM(self.model)
         return self.runner.run(alert_id, llm, note, log=log)
 
     def triage(self, alert_id: str, note: str = "", log: list[dict[str, Any]] | None = None,
-               force_llm: bool = False) -> dict[str, Any]:  # fmt: skip
+               force_llm: bool = False, mode: str | None = None) -> dict[str, Any]:  # fmt: skip
         """Triage one alert and persist the ticket. Returns {"route", "result", "prompt"}."""
         if alert_id not in self.source.alerts:
             raise KeyError(alert_id)
@@ -165,7 +170,7 @@ class TriageFlow:
         else:
             if log is not None:
                 log.append({"type": "discriminador", "output": f"al LLM: {decision.reason}"})
-            result = self._llm_result(alert_id, note, log)
+            result = self._llm_result(alert_id, note, log, mode)
             if isinstance(result.ticket, dict) and result.valid:
                 result.ticket.setdefault("triage_seconds", result.elapsed_s)
         route = "discriminator" if result.model == "discriminator" else "llm"

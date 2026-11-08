@@ -74,6 +74,10 @@ SOC API ─► database.sync ─► BD (schema.sql + enrich: vistas del catálog
 | Front + API (cola, histórico, estadísticas, decisiones) | `python -m src.llm_triage serve --mock` → `http://127.0.0.1:8765` |
 | Tiempo real: BD sin alertas + ingesta periódica desde la SOC API | `python -m src.database.live` y `python -m src.llm_triage serve --mock --db data/tarvia_live.sqlite --live 10 --live-batch 3` (con `scripts/mock_api.ps1` arrancado) |
 
+Al abrir una alerta en el front se pide el criterio del LLM real (`--detail-mode`, por defecto `auto`: Claude Code si
+`claude-agent-sdk` está instalado, si no la API de Anthropic con `ANTHROPIC_API_KEY`, si no mock). Los lotes y el modo
+`--live` siguen usando el modo del servidor (`--mock` para no gastar tokens).
+
 El chat de depuración del prompt sigue en `/chat`; `serve --dataset` mantiene el modo original sobre `docs/`.
 El estado del proyecto está en [implementation_docs/estado_proyecto.md](implementation_docs/estado_proyecto.md).
 

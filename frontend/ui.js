@@ -17,7 +17,9 @@
     check:P+'<path d="M5 12.5l4.5 4.5L19 7.5"/></svg>', trend:P+'<path d="M3 17l6-6 4 4 8-8"/><path d="M15 7h6v6"/></svg>',
     cog:P+'<circle cx="12" cy="12" r="3.2"/><path d="M12 2.8v2.6M12 18.6v2.6M4.2 7.5l2.2 1.3M17.6 15.2l2.2 1.3M4.2 16.5l2.2-1.3M17.6 8.8l2.2-1.3"/><circle cx="12" cy="12" r="7"/></svg>',
     expand:P+'<path d="M4 9V4h5M15 4h5v5M4 15v5h5M20 15v5h-5"/></svg>',
-    play:P+'<path d="M8 5.5v13l10.5-6.5z"/></svg>'
+    play:P+'<path d="M8 5.5v13l10.5-6.5z"/></svg>',
+    collapse:P+'<rect x="3.5" y="4" width="17" height="16" rx="2.5"/><path d="M9 4v16M15.5 9.5L13 12l2.5 2.5"/></svg>',
+    expandSb:P+'<rect x="3.5" y="4" width="17" height="16" rx="2.5"/><path d="M9 4v16M12.5 9.5L15 12l-2.5 2.5"/></svg>'
   };
   window.SentinelIcons=I;
   const PRIORITY={Critical:'Immediate action',High:'Urgent',Medium:'Normal',Low:'Non-urgent'};
@@ -32,15 +34,23 @@
 
   /* ----------------------------------------------------------------------------------------- shell */
   icon=x=>`<span class="nav-icon">${x}</span>`;
+  /* Collapsible sidebar: remembered per browser (storage can be unavailable: fall back to memory). */
+  try{state.sidebarCollapsed=localStorage.getItem('sentinel.sidebar')==='collapsed'}catch(e){state.sidebarCollapsed=false}
+  function toggleSidebar(){
+    state.sidebarCollapsed=!state.sidebarCollapsed;
+    try{localStorage.setItem('sentinel.sidebar',state.sidebarCollapsed?'collapsed':'open')}catch(e){}
+    const app=document.querySelector('.sx.app');if(app)app.classList.toggle('collapsed',state.sidebarCollapsed);
+    const b=document.querySelector('[data-sidebar-toggle]');if(b){b.innerHTML=state.sidebarCollapsed?I.expandSb:I.collapse;b.setAttribute('aria-label',state.sidebarCollapsed?'Expand sidebar':'Collapse sidebar');b.setAttribute('aria-expanded',String(!state.sidebarCollapsed))}
+  }
   shell=function(content){
     const page=state.page,s=L.stats||{};
     const nav=[['ops',I.chart,'Operations center'],['history',I.history,'Decision history'],['assistant',I.spark,'AI Intelligence Assistant']];
     const titles={ops:['OPERATIONS','Alert operations center'],history:['AUDIT LEDGER','Decision history'],assistant:['INTELLIGENCE ASSISTANT','AI Intelligence Assistant']}[page];
     const status=L.on?['ok','All systems operational']:L.error?['down','Backend offline']:['wait','Connecting…'];
-    return `<div class="app sx"><aside class="sidebar"><div class="brand"><span class="mark">${I.shield}</span><span>sentinel</span></div>
-      <div class="nav-label">Workspace</div><nav class="nav">${nav.map(([k,ic,l])=>`<button class="${page===k?'active':''}" data-page="${k}" aria-current="${page===k?'page':'false'}">${icon(ic)}<span>${l}</span></button>`).join('')}</nav>
-      <div class="side-bottom"><div class="engine"><span class="status-dot ${L.on?'':'off'}"></span><span>Processing engine<br/><b>${L.on?'Operational':'Unavailable'}</b></span></div>
-      <div class="profile"><span class="avatar">PG</span><span><b>Paco Gonzalez</b><small>Senior analyst</small></span></div></div></aside>
+    return `<div class="app sx ${state.sidebarCollapsed?'collapsed':''}"><aside class="sidebar"><div class="brand"><span class="mark">${I.shield}</span><span class="brand-name">sentinel</span><button class="sb-toggle" data-sidebar-toggle aria-label="${state.sidebarCollapsed?'Expand':'Collapse'} sidebar" aria-expanded="${!state.sidebarCollapsed}">${state.sidebarCollapsed?I.expandSb:I.collapse}</button></div>
+      <div class="nav-label">Workspace</div><nav class="nav">${nav.map(([k,ic,l])=>`<button class="${page===k?'active':''}" data-page="${k}" aria-current="${page===k?'page':'false'}" title="${l}">${icon(ic)}<span class="nav-text">${l}</span></button>`).join('')}</nav>
+      <div class="side-bottom"><div class="engine" title="Processing engine ${L.on?'operational':'unavailable'}"><span class="status-dot ${L.on?'':'off'}"></span><span class="engine-text">Processing engine<br/><b>${L.on?'Operational':'Unavailable'}</b></span></div>
+      <div class="profile" title="Paco Gonzalez · Senior analyst"><span class="avatar">PG</span><span class="profile-text"><b>Paco Gonzalez</b><small>Senior analyst</small></span></div></div></aside>
       <main class="main"><header class="topbar"><div class="tb-title"><div class="eyebrow">TARVIA SOC / ${titles[0]}</div><h1>${titles[1]}</h1></div>
       <div class="top-actions"><span class="env pill-btn"><span class="status-dot"></span>${L.on?`${E((L.mode||'').toUpperCase())}: Database mirror`:'DEMO: Offline data'} ${I.down}</span>
       <span class="sys ${status[0]}"><span class="status-dot ${status[0]==='ok'?'':'off'}"></span>${status[1]}</span><span class="tb-sep"></span>
@@ -124,6 +134,41 @@
         :history.slice(0,7).map(h=>{const [t,c]=tag(h);return `<li><span class="t-time">${E((h.time.split('·')[1]||'').trim())}</span><div><b>${E(h.alert)}</b> · ${E(h.action)}<br/><span class="tag ${c}">${t}</span></div></li>`})).join('')||'<li class="empty small">No automated actions yet.</li>'}</ul></div></section>`;
   };
 
+  /* ----------------------------------------------------------------------------------------- LLM criterion */
+  const MODE_LABEL={'claude-code':'Claude Code (plan session)',anthropic:'Anthropic API',mock:'Mock (no LLM)'};
+  function stepHtml(x){
+    if(x.type==='contexto')return `<li><span class="tag t-blue">Context request${x.comprobacion?` · ${E(x.comprobacion)}`:''}</span> ${E(x.motivo)}<br/><small class="mono">${E((x.consultas||[]).map(q=>`${q.consulta}(${(q.parametros||[]).join(', ')}) → ${q.filas??'?'} rows`).join(' · '))}</small>${x.is_error?' <span class="tag t-red">rejected</span>':''}</li>`;
+    if(x.type==='texto')return `<li><span class="tag t-grey">Reasoning</span> ${E(x.output)}</li>`;
+    if(x.type==='ticket')return `<li><span class="tag ${x.errors&&x.errors.length?'t-orange':'t-green'}">Ticket attempt ${E(x.attempt)}</span> ${x.errors&&x.errors.length?E(x.errors.join('; ')):'valid (schema + policy)'}</li>`;
+    if(x.type==='discriminador')return `<li><span class="tag t-green">Discriminator</span> ${E(x.output)}</li>`;
+    return `<li><span class="tag t-grey">${E(x.type)}</span> ${E(x.output||'')}</li>`;
+  }
+  function aiSection(a){
+    const t=a.ticket||{},run=L.analysis[a.id],mode=L.detailMode||'mock';
+    const real=t.route==='llm'&&t.model&&t.model!=='mock';
+    let body;
+    if(run&&(run.status==='running'||run.status==='starting')){
+      body=`<div class="ai-run"><span class="spinner"></span><b>Analysing with ${E(MODE_LABEL[run.mode||mode]||mode)}</b><span class="mono">${E(run.elapsed||0)} s</span></div><ul class="ai-steps">${(run.transcript||[]).filter(x=>x.type!=='discriminador').map(stepHtml).join('')||'<li class="muted">Building the prompt and sending it to the model…</li>'}</ul>`;
+    }else if(run&&run.status==='error'){
+      body=`<div class="ai-msg err"><b>LLM analysis failed.</b> ${E(run.error)}<br/><small>Claude Code: run <span class="mono">claude</span> → /login once. API: set ANTHROPIC_API_KEY in .env.</small></div><button class="action primary" data-analyze>Retry LLM analysis</button>`;
+    }else if(real){
+      body=`<div class="ai-msg ok"><b>LLM criterion applied</b> · ${E(t.model)} · ${E(t.attempts)} attempt(s) · ${E(t.elapsed_s||0)} s. The verdict, severity, evidence and actions below come from the model and passed schema + policy validation.</div><button class="action outline" data-analyze>Re-run LLM analysis</button>`;
+    }else if(mode==='mock'){
+      body=`<div class="ai-msg warn"><b>No real LLM configured.</b> This ticket comes from ${t.route==='discriminator'?'the deterministic discriminator':'the mock model'}. Start the server with <span class="mono">--claude-code</span>, <span class="mono">--detail-mode claude-code</span> or an API key to get the LLM criterion.</div>`;
+    }else{
+      body=`<div class="ai-msg warn"><b>${t.route==='discriminator'?'Closed by the discriminator, without LLM.':'Mock ticket: no LLM criterion yet.'}</b> Ask the model to review this alert with the prompt, the runbook and read-only database queries.</div><button class="action primary" data-analyze>Run LLM analysis · ${E(MODE_LABEL[mode]||mode)}</button>`;
+    }
+    return `<section class="investigation-section ai-box" id="ai-analysis"><h3>LLM criterion</h3>${body}</section>`;
+  }
+  L.paintAnalysis=function(a){
+    const box=document.getElementById('ai-analysis');
+    if(box&&state.selectedAlert&&state.selectedAlert.id===a.id){box.outerHTML=aiSection(a);lockDecisions()}
+  };
+  function lockDecisions(){
+    const a=state.selectedAlert,run=a&&L.analysis[a.id],busy=run&&(run.status==='running'||run.status==='starting');
+    document.querySelectorAll('[data-investigation-action]').forEach(b=>{b.disabled=!!busy;b.title=busy?'Wait for the LLM analysis to finish':''});
+  }
+
   /* ----------------------------------------------------------------------------------------- investigation */
   const list=(items,empty)=>items&&items.length?items.map(x=>`<li>${x}</li>`).join(''):`<li class="muted">${empty}</li>`;
   investigation=function(a){
@@ -133,12 +178,13 @@
     const ev=(k.evidence||[]).map(e=>`<span class="mono">${E(e.event_id)}</span> · ${E(e.source)} — ${E(e.finding)}`);
     const acts=(k.recommended_actions||[]).map(x=>`<b>${E(x.action)}</b> → ${E(x.target)} ${x.requires_approval?'<span class="tag t-red">Requires approval</span>':''}${x.justification?`<br/><small>${E(x.justification)}</small>`:''}`);
     const sel=d?(d.selection||[]).map(s=>`<span class="mono">${E(s.event_id)}</span> · ${E(s.source)} · <span class="tag ${s.state==='kept'||s.state==='unfiltered'?'t-blue':'t-grey'}">${E(s.state)}</span>${s.reference?` ${E(s.reference)}`:''}`):null;
-    const steps=d?(d.transcript||[]).filter(x=>x.type==='contexto'||x.type==='discriminador').map(x=>x.type==='discriminador'?`<b>Discriminator</b> ${E(x.output)}`:`<b>${E(x.comprobacion||'')}</b> ${E(x.motivo)} <small class="mono">${E((x.consultas||[]).map(q=>q.consulta).join(', '))}</small>`):null;
+    const steps=d?(d.transcript||[]).map(stepHtml).map(x=>x.replace(/^<li>|<\/li>$/g,'')):null;
     const aff=k.affected||{};
     const ents=[...(aff.hosts||[]).map(x=>['Host',x]),...(aff.business_services||[]).map(x=>['Service',x]),...(aff.users||[]).map(x=>['User',x]),...(aff.customers||[]).map(x=>['Customer',x])];
     return `<div class="investigation-backdrop" data-close-investigation><aside class="investigation" role="dialog" aria-label="Investigation ${E(a.id)}"><div class="investigation-head"><div><span class="mono">INVESTIGATION WORKSPACE · ${E(a.id)} · ${E(t.rule_id)}</span><h2>${E(k.title||a.title)}</h2>
       <div class="investigation-tags"><span class="prio ${a.priority.toLowerCase()}"><i></i>${E(sev)}</span><span class="tag t-blue">${E(L.VERDICT[k.verdict]||k.verdict)}</span><span class="tag ${t.valid?'t-green':'t-red'}">${t.valid?'Schema + policy valid':'Invalid: '+E((t.errors||[]).join('; '))}</span>${k.escalation&&k.escalation.escalate?'<span class="tag t-orange">Escalation proposed</span>':''}</div></div><button class="close" data-close-investigation aria-label="Close">×</button></div>
       <div class="investigation-body">
+      ${aiSection(a)}
       <section class="investigation-section"><h3>Summary</h3><p class="lead">${E(k.summary)}</p><div class="detail-grid"><div><small>Alert created</small><span class="mono">${E(a.detected)}</span></div><div><small>Rule</small>${E(t.rule_id)} · ${E(t.rule_name)}</div><div><small>Source product</small>${E(t.source_product)}</div><div><small>Runbook</small>${E(t.runbook_id)}</div><div><small>Confidence</small><b>${a.confidence}%</b></div><div><small>Model · attempts</small>${E(t.model)} · ${E(t.attempts)}</div></div></section>
       <section class="investigation-section"><h3>Severity</h3><p>${E(k.severity_rationale||'—')}</p><div class="detail-grid"><div><small>Rule severity</small>${E(t.rule_severity)}</div><div><small>Final severity</small><b class="r-${a.priority.toLowerCase()}">${E(sev)}</b></div></div></section>
       <section class="investigation-section"><h3>Evidence</h3><ul class="ticket-list">${list(ev,'No evidence cited')}</ul></section>
@@ -174,15 +220,23 @@
 
   /* ----------------------------------------------------------------------------------------- interactions */
   document.addEventListener('click',e=>{
-    const t=e.target.closest('[data-alert]');if(t){const a=state.alerts.find(x=>x.id===t.dataset.alert);if(a)setTimeout(()=>L.detail(a),0)}
+    const t=e.target.closest('[data-alert]');if(t){const a=state.alerts.find(x=>x.id===t.dataset.alert);if(a)setTimeout(()=>{L.detail(a);autoAnalyze(a);lockDecisions()},0)}
+    if(e.target.closest('[data-analyze]')&&state.selectedAlert){const note=document.querySelector('#decision-comment')?.value||'';L.analyze(state.selectedAlert,note)}
     const c=e.target.closest('[data-chat-alert]');if(c){const a=state.alerts.find(x=>x.id===c.dataset.chatAlert);if(a)setTimeout(()=>L.detail(a),0)}
     const b=e.target.closest('[data-batch]');if(b&&!b.disabled)L.runBatch(Number(b.dataset.batch));
     if(e.target.closest('[data-refresh]'))L.load();
+    if(e.target.closest('[data-sidebar-toggle]'))toggleSidebar();
   });
   document.addEventListener('keydown',e=>{
     if(e.key==='Escape'&&(state.selectedAlert||state.selected)){state.selectedAlert=null;state.selected=null;render();return}
     if(e.key==='Enter'){const el=e.target.closest&&e.target.closest('[data-alert],[data-decision]');if(el)el.click()}
   });
+  /* Opening a mock ticket asks the configured real LLM for its criterion automatically (once per alert and session).
+     Discriminator tickets keep their deterministic verdict unless the analyst asks for the LLM. */
+  function autoAnalyze(a){
+    if(!L.on||!a||!a.ticket||(L.detailMode||'mock')==='mock'||L.analysis[a.id])return;
+    if(a.ticket.route==='llm'&&a.ticket.model==='mock')L.analyze(a);
+  }
   setInterval(()=>{const c=document.getElementById('sentinel-clock');if(c)c.textContent=clock();const u=document.getElementById('sentinel-updated');if(u)u.textContent=ago()},1000);
   render();
   L.load();

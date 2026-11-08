@@ -11,7 +11,7 @@ import json
 import sys
 
 from .client import load_env
-from .server import App, serve
+from .server import MODES, App, serve
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -28,6 +28,12 @@ def main(argv: list[str] | None = None) -> int:
         help="tiempo real: cada N s ingesta alertas nuevas de la SOC API y las tría (modo base de datos)",
     )
     s.add_argument("--live-batch", type=int, default=3, help="alertas nuevas por ciclo en modo --live")
+    s.add_argument(
+        "--detail-mode",
+        choices=("auto", *MODES),
+        default="auto",
+        help="LLM al abrir una alerta en el front (auto: el del servidor, o uno real si el servidor va en mock)",
+    )
     t = sub.add_parser("triage", help="triaje de una alerta por consola")
     t.add_argument("alert_id")
     t.add_argument("--note", default="", help="indicación del analista")
@@ -41,7 +47,11 @@ def main(argv: list[str] | None = None) -> int:
         sp.add_argument("--dataset", action="store_true", help="forzar el modo dataset (docs/, sin persistencia)")
     args = p.parse_args(argv)
     mode = "mock" if args.mock else "claude-code" if args.claude_code else "anthropic"
-    app = App(args.data, mode, args.model, db=args.db, dataset=args.dataset)
+    app = App(
+        args.data, mode, args.model, db=args.db, dataset=args.dataset, detail_mode=getattr(args, "detail_mode", "auto")
+    )
+    if args.cmd == "serve" and app.flow is not None:
+        print(f"[llm_triage] criterio LLM al abrir una alerta: {app.detail_mode}")
     if args.cmd == "serve":
         if args.live:
             if app.flow is None:

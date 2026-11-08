@@ -6,7 +6,9 @@ Why: the demo must show what the AI receives and consults, not only its answer. 
 
 from __future__ import annotations
 
+import importlib.util
 import json
+import os
 import sys
 import threading
 import time
@@ -41,7 +43,7 @@ class App:
 
     def __init__(
         self, data_dir: str = "docs", mode: str = "anthropic", model: str | None = None,
-        db: str | None = None, dataset: bool = False,
+        db: str | None = None, dataset: bool = False, detail_mode: str = "auto",
     ) -> None:  # fmt: skip
         if mode not in MODES:
             raise ValueError(f"modo desconocido: {mode} (usa {', '.join(MODES)})")
@@ -50,6 +52,8 @@ class App:
         self._lock = threading.Lock()
         self.flow = None
         self.claude_code = None
+        self.detail_mode = resolve_detail_mode(detail_mode, mode)
+        self.analyses: dict[str, str] = {}  # alert_id -> running analysis job_id
         db_file = enrich.db_path(db)
         if not dataset and db_file.exists():
             from ..triage_flow import TriageFlow
@@ -86,10 +90,11 @@ class App:
         package = self.builder.build(alert_id)
         return package.to_dict() | {"queries": [asdict(q) for q in package.queries]}
 
-    def triage(self, alert_id: str, note: str = "", log: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    def triage(self, alert_id: str, note: str = "", log: list[dict[str, Any]] | None = None,
+               mode: str | None = None, force: bool = False) -> dict[str, Any]:  # fmt: skip
         """Synchronous triage (CLI). The web UI uses start_job/job so long runs survive client timeouts."""
         if self.flow is not None:
-            out = self.flow.triage(alert_id, note, log, force_llm=bool(note.strip()))
+            out = self.flow.triage(alert_id, note, log, force_llm=force or bool(note.strip()), mode=mode)
             return {"result": out["result"], "route": out["route"], "prompt": self.prompt(alert_id)}
         if self.claude_code:
             result = self.claude_code.run(alert_id, analyst_note=note, log=log)
@@ -101,24 +106,38 @@ class App:
         return {"result": result.to_dict(), "prompt": self.prompt(alert_id)}
 
     # ------------------------------------------------------------ background jobs
-    def start_job(self, alert_id: str, note: str = "") -> str:
+    def start_job(self, alert_id: str, note: str = "", mode: str | None = None, force: bool = False) -> str:
         """Run the triage in a thread; the browser polls `job()` instead of holding one long request."""
         if alert_id not in self.source.alerts:
             raise KeyError(alert_id)
         job_id = uuid.uuid4().hex[:12]
-        job: dict[str, Any] = {"status": "running", "alert_id": alert_id, "log": [], "started": time.monotonic()}
+        job: dict[str, Any] = {"status": "running", "alert_id": alert_id, "log": [], "started": time.monotonic(),
+                               "mode": mode or self.mode}  # fmt: skip
         with self._lock:
             self.jobs[job_id] = job
 
         def work() -> None:
             try:
-                out = self.triage(alert_id, note, job["log"])
+                out = self.triage(alert_id, note, job["log"], mode=mode, force=force)
                 job.update(status="done", result=out["result"], prompt=out["prompt"], route=out.get("route"))
             except Exception as exc:  # surfaced to the UI (login, network, rate limit...)
                 job.update(status="error", error=f"{type(exc).__name__}: {exc}")
                 print(f"[llm_triage] {alert_id}: error {job['error']}", flush=True)
 
         threading.Thread(target=work, daemon=True).start()
+        return job_id
+
+    def start_analysis(self, alert_id: str, note: str = "") -> str:
+        """LLM criterion for an alert opened in the investigation view (detail mode), one run per alert at a time."""
+        if self.flow is None:
+            raise RuntimeError("el análisis requiere la base de datos")
+        with self._lock:
+            running = self.analyses.get(alert_id)
+            if running and self.jobs.get(running, {}).get("status") == "running":
+                return running
+        job_id = self.start_job(alert_id, note, mode=self.detail_mode, force=True)
+        with self._lock:
+            self.analyses[alert_id] = job_id
         return job_id
 
     def start_batch(self, limit: int) -> str:
@@ -152,6 +171,19 @@ class App:
         return view | {"transcript": list(job["log"]), "elapsed_s": round(time.monotonic() - job["started"], 1)}
 
 
+def resolve_detail_mode(detail_mode: str, mode: str) -> str:
+    """LLM used when an analyst opens an alert. `auto`: the server mode, or a real LLM when the server runs on mock."""
+    if detail_mode != "auto":
+        if detail_mode not in MODES:
+            raise ValueError(f"modo de detalle desconocido: {detail_mode}")
+        return detail_mode
+    if mode != "mock":
+        return mode
+    if importlib.util.find_spec("claude_agent_sdk") is not None:
+        return "claude-code"
+    return "anthropic" if os.environ.get("ANTHROPIC_API_KEY") else "mock"
+
+
 def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         def _send(self, status: int, body: bytes, ctype: str = "application/json; charset=utf-8") -> None:
@@ -181,7 +213,13 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                     return
                 elif url.path == "/api/info":
                     self._json(
-                        200, {"mode": app.mode, "model": app.model or "por defecto", "database": app.flow is not None}
+                        200,
+                        {
+                            "mode": app.mode,
+                            "model": app.model or "por defecto",
+                            "database": app.flow is not None,
+                            "detail_mode": app.detail_mode,
+                        },
                     )
                 elif url.path == "/api/alerts":
                     self._json(200, app.alerts(qs.get("q", "")))
@@ -239,6 +277,15 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                     self._json(404, {"error": f"no encontrado: {exc}"})
                 except ValueError as exc:
                     self._json(400, {"error": str(exc)})
+                return
+            if path == "/api/analyze":
+                try:
+                    self._json(202, {"job_id": app.start_analysis(body["alert_id"], body.get("note", "")),
+                                     "mode": app.detail_mode})  # fmt: skip
+                except KeyError as exc:
+                    self._json(404, {"error": f"no encontrado: {exc}"})
+                except RuntimeError as exc:
+                    self._json(409, {"error": str(exc)})
                 return
             if path == "/api/batch":
                 try:

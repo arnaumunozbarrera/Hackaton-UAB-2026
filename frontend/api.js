@@ -37,6 +37,33 @@
       status:'Resolved',time:fmt(t.decided_at||t.created_at),stamp:t.decided_at||t.created_at,ticket:t};
   }
 
+  Live.toAlert=toAlert;
+  Live.analysis={};  /* alert_id -> {job,status,transcript,elapsed,error,mode} */
+  const isReal=t=>t&&t.route==='llm'&&t.model&&t.model!=='mock';
+  Live.needsAnalysis=a=>!!(a&&a.ticket&&!isReal(a.ticket));
+  Live.analyze=async function(a,note=''){
+    if(!Live.on||!a)return;
+    const cur=Live.analysis[a.id];if(cur&&cur.status==='running')return;
+    Live.analysis[a.id]={status:'starting',transcript:[],elapsed:0};Live.paintAnalysis(a);
+    try{
+      const {job_id,mode}=await post('/api/analyze',{alert_id:a.id,note});
+      Object.assign(Live.analysis[a.id],{job:job_id,mode,status:'running'});
+      const poll=async()=>{
+        let j;try{j=await api('/api/job?id='+job_id)}catch(e){Object.assign(Live.analysis[a.id],{status:'error',error:e.message});Live.paintAnalysis(a);return}
+        Object.assign(Live.analysis[a.id],{status:j.status,transcript:j.transcript||[],elapsed:j.elapsed_s,error:j.error});
+        if(j.status==='running'){Live.paintAnalysis(a);setTimeout(poll,1500);return}
+        if(j.status==='done'){
+          try{const d=await api('/api/tickets/'+encodeURIComponent(a.id));const fresh=toAlert(d);fresh.detail=d;
+            const i=state.alerts.findIndex(x=>x.id===a.id);if(i>=0)state.alerts[i]=fresh;
+            if(state.selectedAlert&&state.selectedAlert.id===a.id){const c=document.querySelector('#decision-comment')?.value||'';state.selectedAlert=fresh;render();const t=document.querySelector('#decision-comment');if(t)t.value=c}
+            toast(`${a.id} · LLM verdict: ${VERDICT[(d.ticket||{}).verdict]||'—'}`);
+          }catch(e){toast('Reload failed: '+e.message)}
+        }else Live.paintAnalysis(a);
+      };
+      setTimeout(poll,1200);
+    }catch(e){Object.assign(Live.analysis[a.id],{status:'error',error:e.message});Live.paintAnalysis(a)}
+  };
+
   Live.load=async function(){
     try{
       const info=await api('/api/info');
@@ -45,7 +72,7 @@
       const keep=new Map(state.alerts.map(a=>[a.id,a.detail]));
       state.alerts=queue.map(toAlert);state.alerts.forEach(a=>{if(keep.get(a.id))a.detail=keep.get(a.id)});
       history.length=0;hist.forEach((t,i)=>history.push(toHistory(t,i)));
-      Object.assign(Live,{on:true,stats,mode:info.mode,error:null,loadedAt:Date.now()});
+      Object.assign(Live,{on:true,stats,mode:info.mode,detailMode:info.detail_mode||info.mode,error:null,loadedAt:Date.now()});
     }catch(e){Live.error=e.message||String(e)}
     if(!state.selectedAlert&&!state.selected&&!state.expanded)render();
   };
