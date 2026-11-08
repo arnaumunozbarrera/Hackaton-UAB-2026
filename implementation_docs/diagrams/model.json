@@ -20,6 +20,11 @@
       "name": "Eventos y detalle por fuente",
       "color": "#275ba6",
       "fill": "#eff5ff"
+    },
+    "triage": {
+      "name": "Resultados del triaje",
+      "color": "#5a6b2a",
+      "fill": "#f6f9ec"
     }
   },
   "tables": [
@@ -4390,6 +4395,499 @@
         "alert_id"
       ],
       "notes": "Atributos aprobados: `alert_id` es clave primaria y referencia a `alerts.alert_id`. Cada alerta tiene 0..1 clasificación guardada; cada clasificación pertenece a una alerta. No conserva varias evaluaciones de la misma alerta.\n`verdict` es obligatorio y solo admite `true_positive`, `false_positive` o `benign_true_positive`. Esta tabla se alimentará con resultados del triaje, no con clasificaciones preexistentes en los CSV/JSONL. Los tres valores son el dominio permitido, no un recuento de resultados ya generados."
+    },
+    {
+      "name": "triage_runs",
+      "group": "triage",
+      "fields": [
+        {
+          "name": "run_id",
+          "origin": "Identificador secuencial de la ejecución (SQLite `INTEGER PRIMARY KEY`)",
+          "distinct": "Resultado del triaje",
+          "key": "PK",
+          "originText": "Identificador secuencial de la ejecución (SQLite INTEGER PRIMARY KEY)",
+          "sourceFiles": []
+        },
+        {
+          "name": "alert_id",
+          "origin": "Alerta triada → `alerts.alert_id`",
+          "distinct": "Resultado del triaje",
+          "key": "FK",
+          "originText": "Alerta triada → alerts.alert_id",
+          "sourceFiles": []
+        },
+        {
+          "name": "stage",
+          "origin": "Etapa: `auto_check` (comprobaciones deterministas) o `llm`",
+          "distinct": "Resultado del triaje",
+          "key": "",
+          "originText": "Etapa: auto_check (comprobaciones deterministas) o llm",
+          "sourceFiles": []
+        },
+        {
+          "name": "model",
+          "origin": "Modelo o motor que produjo el resultado (`basic-checks`, nombre del LLM, `mock`)",
+          "distinct": "Resultado del triaje",
+          "key": "",
+          "originText": "Modelo o motor que produjo el resultado (basic-checks, nombre del LLM, mock)",
+          "sourceFiles": []
+        },
+        {
+          "name": "status",
+          "origin": "Estado: `running`, `done` o `error`",
+          "distinct": "Resultado del triaje",
+          "key": "",
+          "originText": "Estado: running, done o error",
+          "sourceFiles": []
+        },
+        {
+          "name": "started_at",
+          "origin": "Inicio de la ejecución, UTC ISO 8601",
+          "distinct": "Resultado del triaje",
+          "key": "",
+          "originText": "Inicio de la ejecución, UTC ISO 8601",
+          "sourceFiles": []
+        },
+        {
+          "name": "finished_at",
+          "origin": "Fin de la ejecución, UTC ISO 8601",
+          "distinct": "Resultado del triaje",
+          "key": "",
+          "originText": "Fin de la ejecución, UTC ISO 8601",
+          "sourceFiles": []
+        },
+        {
+          "name": "valid",
+          "origin": "1 si el ticket producido supera el esquema y la política",
+          "distinct": "Resultado del triaje",
+          "key": "",
+          "originText": "1 si el ticket producido supera el esquema y la política",
+          "sourceFiles": []
+        },
+        {
+          "name": "errors_json",
+          "origin": "Lista de errores de validación o de ejecución",
+          "distinct": "Resultado del triaje",
+          "key": "",
+          "originText": "Lista de errores de validación o de ejecución",
+          "sourceFiles": []
+        },
+        {
+          "name": "usage_json",
+          "origin": "Consumo de tokens y turnos devuelto por el LLM",
+          "distinct": "Resultado del triaje",
+          "key": "",
+          "originText": "Consumo de tokens y turnos devuelto por el LLM",
+          "sourceFiles": []
+        },
+        {
+          "name": "elapsed_s",
+          "origin": "Duración en segundos",
+          "distinct": "Resultado del triaje",
+          "key": "",
+          "originText": "Duración en segundos",
+          "sourceFiles": []
+        },
+        {
+          "name": "transcript_json",
+          "origin": "Transcripción completa de la ejecución (texto, peticiones de contexto, tickets)",
+          "distinct": "Resultado del triaje",
+          "key": "",
+          "originText": "Transcripción completa de la ejecución (texto, peticiones de contexto, tickets)",
+          "sourceFiles": []
+        }
+      ],
+      "pk": [
+        "run_id"
+      ],
+      "notes": "Una fila por ejecución de triaje. Cada alerta tiene una ejecución `auto_check` y, si no se descarta, una `llm`. Es salida del sistema, no observación de origen: nunca se rellena en la ingesta."
+    },
+    {
+      "name": "triage_checks",
+      "group": "triage",
+      "fields": [
+        {
+          "name": "run_id",
+          "origin": "Ejecución `auto_check` → `triage_runs.run_id`",
+          "distinct": "Resultado del triaje",
+          "key": "PK / FK",
+          "originText": "Ejecución auto_check → triage_runs.run_id",
+          "sourceFiles": []
+        },
+        {
+          "name": "discard",
+          "origin": "1 si las comprobaciones deterministas permiten cerrar la alerta sin LLM",
+          "distinct": "Resultado del triaje",
+          "key": "",
+          "originText": "1 si las comprobaciones deterministas permiten cerrar la alerta sin LLM",
+          "sourceFiles": []
+        },
+        {
+          "name": "verdict",
+          "origin": "Veredicto propuesto al descartar: `benign_true_positive` o `false_positive`",
+          "distinct": "Resultado del triaje",
+          "key": "",
+          "originText": "Veredicto propuesto al descartar: benign_true_positive o false_positive",
+          "sourceFiles": []
+        },
+        {
+          "name": "severity",
+          "origin": "Severidad propuesta al descartar (`informational` o `low`)",
+          "distinct": "Resultado del triaje",
+          "key": "",
+          "originText": "Severidad propuesta al descartar (informational o low)",
+          "sourceFiles": []
+        },
+        {
+          "name": "reasons_json",
+          "origin": "Lista de razones legibles (regla aplicada, guardas activadas)",
+          "distinct": "Resultado del triaje",
+          "key": "",
+          "originText": "Lista de razones legibles (regla aplicada, guardas activadas)",
+          "sourceFiles": []
+        },
+        {
+          "name": "references_json",
+          "origin": "Referencias que justifican el descarte (p. ej. `CHG-2026-1042`)",
+          "distinct": "Resultado del triaje",
+          "key": "",
+          "originText": "Referencias que justifican el descarte (p. ej. CHG-2026-1042)",
+          "sourceFiles": []
+        },
+        {
+          "name": "guards_json",
+          "origin": "Guardas de seguridad que impiden el cierre automático",
+          "distinct": "Resultado del triaje",
+          "key": "",
+          "originText": "Guardas de seguridad que impiden el cierre automático",
+          "sourceFiles": []
+        }
+      ],
+      "pk": [
+        "run_id"
+      ],
+      "notes": "Resultado de las comprobaciones básicas de una alerta. Las guardas (regla high/critical, OT, IOC del TIP, otra alerta high/critical sin explicar en ±24 h) impiden el descarte."
+    },
+    {
+      "name": "triage_tickets",
+      "group": "triage",
+      "fields": [
+        {
+          "name": "run_id",
+          "origin": "Ejecución que produjo el ticket → `triage_runs.run_id`",
+          "distinct": "Resultado del triaje",
+          "key": "PK / FK",
+          "originText": "Ejecución que produjo el ticket → triage_runs.run_id",
+          "sourceFiles": []
+        },
+        {
+          "name": "alert_id",
+          "origin": "Alerta → `alerts.alert_id`",
+          "distinct": "Resultado del triaje",
+          "key": "FK",
+          "originText": "Alerta → alerts.alert_id",
+          "sourceFiles": []
+        },
+        {
+          "name": "ticket_id",
+          "origin": "`ticket_id` del ticket (lo elige el modelo; no es único entre alertas)",
+          "distinct": "Resultado del triaje",
+          "key": "",
+          "originText": "ticket_id del ticket (lo elige el modelo; no es único entre alertas)",
+          "sourceFiles": []
+        },
+        {
+          "name": "ticket_json",
+          "origin": "Ticket completo según `docs/01_contexto/ticket_salida.schema.json`",
+          "distinct": "Resultado del triaje",
+          "key": "",
+          "originText": "Ticket completo según docs/01_contexto/ticket_salida.schema.json",
+          "sourceFiles": []
+        },
+        {
+          "name": "verdict",
+          "origin": "`verdict` del ticket",
+          "distinct": "Resultado del triaje",
+          "key": "",
+          "originText": "verdict del ticket",
+          "sourceFiles": []
+        },
+        {
+          "name": "severity",
+          "origin": "`severity` del ticket",
+          "distinct": "Resultado del triaje",
+          "key": "",
+          "originText": "severity del ticket",
+          "sourceFiles": []
+        },
+        {
+          "name": "ticket_confidence",
+          "origin": "`confidence` del ticket, entre 0 y 1",
+          "distinct": "Resultado del triaje",
+          "key": "",
+          "originText": "confidence del ticket, entre 0 y 1",
+          "sourceFiles": []
+        },
+        {
+          "name": "valid",
+          "origin": "1 si el ticket supera el esquema y la política",
+          "distinct": "Resultado del triaje",
+          "key": "",
+          "originText": "1 si el ticket supera el esquema y la política",
+          "sourceFiles": []
+        },
+        {
+          "name": "created_at",
+          "origin": "Momento de registro, UTC ISO 8601",
+          "distinct": "Resultado del triaje",
+          "key": "",
+          "originText": "Momento de registro, UTC ISO 8601",
+          "sourceFiles": []
+        }
+      ],
+      "pk": [
+        "run_id"
+      ],
+      "notes": "Un ticket por ejecución (automático o del LLM). La clave es la ejecución porque el `ticket_id` lo genera el modelo y puede repetirse entre alertas."
+    },
+    {
+      "name": "triage_context_requests",
+      "group": "triage",
+      "fields": [
+        {
+          "name": "run_id",
+          "origin": "Ejecución `llm` → `triage_runs.run_id`",
+          "distinct": "Resultado del triaje",
+          "key": "PK / FK",
+          "originText": "Ejecución llm → triage_runs.run_id",
+          "sourceFiles": []
+        },
+        {
+          "name": "n",
+          "origin": "Número de orden de la petición dentro de la ejecución (1..6)",
+          "distinct": "Resultado del triaje",
+          "key": "PK",
+          "originText": "Número de orden de la petición dentro de la ejecución (1..6)",
+          "sourceFiles": []
+        },
+        {
+          "name": "motivo",
+          "origin": "Motivo declarado por el LLM (dato no confiable)",
+          "distinct": "Resultado del triaje",
+          "key": "",
+          "originText": "Motivo declarado por el LLM (dato no confiable)",
+          "sourceFiles": []
+        },
+        {
+          "name": "comprobacion",
+          "origin": "Comprobación del runbook a la que responde (opcional)",
+          "distinct": "Resultado del triaje",
+          "key": "",
+          "originText": "Comprobación del runbook a la que responde (opcional)",
+          "sourceFiles": []
+        },
+        {
+          "name": "consultas_json",
+          "origin": "Consultas del catálogo pedidas, con sus parámetros",
+          "distinct": "Resultado del triaje",
+          "key": "",
+          "originText": "Consultas del catálogo pedidas, con sus parámetros",
+          "sourceFiles": []
+        },
+        {
+          "name": "rows_json",
+          "origin": "Filas devueltas por cada consulta (máximo 50 por consulta)",
+          "distinct": "Resultado del triaje",
+          "key": "",
+          "originText": "Filas devueltas por cada consulta (máximo 50 por consulta)",
+          "sourceFiles": []
+        },
+        {
+          "name": "is_error",
+          "origin": "1 si la petición se rechazó (sin motivo, demasiadas consultas o límite alcanzado)",
+          "distinct": "Resultado del triaje",
+          "key": "",
+          "originText": "1 si la petición se rechazó (sin motivo, demasiadas consultas o límite alcanzado)",
+          "sourceFiles": []
+        }
+      ],
+      "pk": [
+        "run_id",
+        "n"
+      ],
+      "notes": "Respuestas de tipo 2 (`solicitar_contexto`) del LLM, para mostrar qué pidió, por qué y qué leyó."
+    },
+    {
+      "name": "analyst_decisions",
+      "group": "triage",
+      "fields": [
+        {
+          "name": "decision_id",
+          "origin": "Identificador secuencial de la decisión",
+          "distinct": "Resultado del triaje",
+          "key": "PK",
+          "originText": "Identificador secuencial de la decisión",
+          "sourceFiles": []
+        },
+        {
+          "name": "alert_id",
+          "origin": "Alerta → `alerts.alert_id`",
+          "distinct": "Resultado del triaje",
+          "key": "FK",
+          "originText": "Alerta → alerts.alert_id",
+          "sourceFiles": []
+        },
+        {
+          "name": "run_id",
+          "origin": "Ticket decidido → `triage_tickets.run_id`",
+          "distinct": "Resultado del triaje",
+          "key": "FK",
+          "originText": "Ticket decidido → triage_tickets.run_id",
+          "sourceFiles": []
+        },
+        {
+          "name": "item",
+          "origin": "Elemento decidido: `verdict` o `action:<n>` (índice en `recommended_actions`)",
+          "distinct": "Resultado del triaje",
+          "key": "",
+          "originText": "Elemento decidido: verdict o action:<n> (índice en recommended_actions)",
+          "sourceFiles": []
+        },
+        {
+          "name": "decision",
+          "origin": "`accepted` o `rejected`",
+          "distinct": "Resultado del triaje",
+          "key": "",
+          "originText": "accepted o rejected",
+          "sourceFiles": []
+        },
+        {
+          "name": "override_verdict",
+          "origin": "Veredicto del analista cuando corrige o completa el del ticket",
+          "distinct": "Resultado del triaje",
+          "key": "",
+          "originText": "Veredicto del analista cuando corrige o completa el del ticket",
+          "sourceFiles": []
+        },
+        {
+          "name": "analyst",
+          "origin": "Analista que decide",
+          "distinct": "Resultado del triaje",
+          "key": "",
+          "originText": "Analista que decide",
+          "sourceFiles": []
+        },
+        {
+          "name": "comment",
+          "origin": "Comentario del analista",
+          "distinct": "Resultado del triaje",
+          "key": "",
+          "originText": "Comentario del analista",
+          "sourceFiles": []
+        },
+        {
+          "name": "decided_at",
+          "origin": "Momento de la decisión, UTC ISO 8601",
+          "distinct": "Resultado del triaje",
+          "key": "",
+          "originText": "Momento de la decisión, UTC ISO 8601",
+          "sourceFiles": []
+        }
+      ],
+      "pk": [
+        "decision_id"
+      ],
+      "notes": "Decisiones humanas sobre el veredicto y cada acción recomendada. Solo aceptar el veredicto escribe `alert_history`."
+    },
+    {
+      "name": "executed_actions",
+      "group": "triage",
+      "fields": [
+        {
+          "name": "execution_id",
+          "origin": "Identificador secuencial de la ejecución de la acción",
+          "distinct": "Resultado del triaje",
+          "key": "PK",
+          "originText": "Identificador secuencial de la ejecución de la acción",
+          "sourceFiles": []
+        },
+        {
+          "name": "alert_id",
+          "origin": "Alerta → `alerts.alert_id`",
+          "distinct": "Resultado del triaje",
+          "key": "FK",
+          "originText": "Alerta → alerts.alert_id",
+          "sourceFiles": []
+        },
+        {
+          "name": "run_id",
+          "origin": "Ticket cuya acción se ejecuta → `triage_tickets.run_id`",
+          "distinct": "Resultado del triaje",
+          "key": "FK",
+          "originText": "Ticket cuya acción se ejecuta → triage_tickets.run_id",
+          "sourceFiles": []
+        },
+        {
+          "name": "action_index",
+          "origin": "Índice de la acción en `recommended_actions`",
+          "distinct": "Resultado del triaje",
+          "key": "",
+          "originText": "Índice de la acción en recommended_actions",
+          "sourceFiles": []
+        },
+        {
+          "name": "action",
+          "origin": "Acción de la API simulada (`isolate_host`, `block_ioc`...) o `escalate_ot`",
+          "distinct": "Resultado del triaje",
+          "key": "",
+          "originText": "Acción de la API simulada (isolate_host, block_ioc...) o escalate_ot",
+          "sourceFiles": []
+        },
+        {
+          "name": "target",
+          "origin": "Objetivo de la acción",
+          "distinct": "Resultado del triaje",
+          "key": "",
+          "originText": "Objetivo de la acción",
+          "sourceFiles": []
+        },
+        {
+          "name": "approval_token",
+          "origin": "Token de `POST /approvals` cuando la política exige aprobación",
+          "distinct": "Resultado del triaje",
+          "key": "",
+          "originText": "Token de POST /approvals cuando la política exige aprobación",
+          "sourceFiles": []
+        },
+        {
+          "name": "status",
+          "origin": "`ok`, `refused` o `error`",
+          "distinct": "Resultado del triaje",
+          "key": "",
+          "originText": "ok, refused o error",
+          "sourceFiles": []
+        },
+        {
+          "name": "api_result_json",
+          "origin": "Respuesta de la API de contención o motivo del rechazo",
+          "distinct": "Resultado del triaje",
+          "key": "",
+          "originText": "Respuesta de la API de contención o motivo del rechazo",
+          "sourceFiles": []
+        },
+        {
+          "name": "executed_at",
+          "origin": "Momento de ejecución, UTC ISO 8601",
+          "distinct": "Resultado del triaje",
+          "key": "",
+          "originText": "Momento de ejecución, UTC ISO 8601",
+          "sourceFiles": []
+        }
+      ],
+      "pk": [
+        "execution_id"
+      ],
+      "notes": "Contención ejecutada tras la aceptación del analista, a través de la API simulada. Nunca se actúa sobre OT: se registra `refused` y se escala."
     }
   ],
   "relations": [
@@ -6190,8 +6688,134 @@
       "kind": "match",
       "note": "Comparar con $.bucketName dentro de los parámetros JSON.",
       "cardinality": "Coincidencia"
+    },
+    {
+      "id": "rel_128",
+      "child": "triage_runs",
+      "childFields": [
+        "alert_id"
+      ],
+      "parent": "alerts",
+      "parentFields": [
+        "alert_id"
+      ],
+      "kind": "fk",
+      "note": "",
+      "cardinality": "N → 1"
+    },
+    {
+      "id": "rel_129",
+      "child": "triage_checks",
+      "childFields": [
+        "run_id"
+      ],
+      "parent": "triage_runs",
+      "parentFields": [
+        "run_id"
+      ],
+      "kind": "fk",
+      "note": "",
+      "cardinality": "N → 1"
+    },
+    {
+      "id": "rel_130",
+      "child": "triage_tickets",
+      "childFields": [
+        "run_id"
+      ],
+      "parent": "triage_runs",
+      "parentFields": [
+        "run_id"
+      ],
+      "kind": "fk",
+      "note": "",
+      "cardinality": "N → 1"
+    },
+    {
+      "id": "rel_131",
+      "child": "triage_tickets",
+      "childFields": [
+        "alert_id"
+      ],
+      "parent": "alerts",
+      "parentFields": [
+        "alert_id"
+      ],
+      "kind": "fk",
+      "note": "",
+      "cardinality": "N → 1"
+    },
+    {
+      "id": "rel_132",
+      "child": "triage_context_requests",
+      "childFields": [
+        "run_id"
+      ],
+      "parent": "triage_runs",
+      "parentFields": [
+        "run_id"
+      ],
+      "kind": "fk",
+      "note": "",
+      "cardinality": "N → 1"
+    },
+    {
+      "id": "rel_133",
+      "child": "analyst_decisions",
+      "childFields": [
+        "alert_id"
+      ],
+      "parent": "alerts",
+      "parentFields": [
+        "alert_id"
+      ],
+      "kind": "fk",
+      "note": "",
+      "cardinality": "N → 1"
+    },
+    {
+      "id": "rel_134",
+      "child": "analyst_decisions",
+      "childFields": [
+        "run_id"
+      ],
+      "parent": "triage_tickets",
+      "parentFields": [
+        "run_id"
+      ],
+      "kind": "fk",
+      "note": "",
+      "cardinality": "N → 1"
+    },
+    {
+      "id": "rel_135",
+      "child": "executed_actions",
+      "childFields": [
+        "alert_id"
+      ],
+      "parent": "alerts",
+      "parentFields": [
+        "alert_id"
+      ],
+      "kind": "fk",
+      "note": "",
+      "cardinality": "N → 1"
+    },
+    {
+      "id": "rel_136",
+      "child": "executed_actions",
+      "childFields": [
+        "run_id"
+      ],
+      "parent": "triage_tickets",
+      "parentFields": [
+        "run_id"
+      ],
+      "kind": "fk",
+      "note": "",
+      "cardinality": "N → 1"
     }
   ],
   "source": "implementation_docs/trazabilidad_bd.md",
-  "sourceSha256": "4fd6537c997b0812fada27f1d517df10c2c7afa92be915204b6c535797658f7a"
+  "sourceSha256": "df47436c69a369cf31c17fff68dbb9dbb691fad146444b3f8b6775e0bb0866a9"
 }

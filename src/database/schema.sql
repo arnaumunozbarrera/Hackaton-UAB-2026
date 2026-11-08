@@ -699,6 +699,94 @@ CREATE TABLE "alert_history" (
   CHECK (verdict IN ('true_positive', 'false_positive', 'benign_true_positive'))
 );
 
+CREATE TABLE "triage_runs" (
+  "run_id" INTEGER NOT NULL,
+  "alert_id" TEXT NOT NULL,
+  "stage" TEXT NOT NULL CHECK ("stage" IN ('auto_check', 'llm')),
+  "model" TEXT,
+  "status" TEXT NOT NULL CHECK ("status" IN ('running', 'done', 'error')),
+  "started_at" TEXT NOT NULL,
+  "finished_at" TEXT,
+  "valid" INTEGER CHECK ("valid" IN (0, 1)),
+  "errors_json" TEXT CHECK ("errors_json" IS NULL OR json_valid("errors_json")),
+  "usage_json" TEXT CHECK ("usage_json" IS NULL OR json_valid("usage_json")),
+  "elapsed_s" REAL,
+  "transcript_json" TEXT CHECK ("transcript_json" IS NULL OR json_valid("transcript_json")),
+  PRIMARY KEY ("run_id"),
+  FOREIGN KEY ("alert_id") REFERENCES "alerts" ("alert_id") DEFERRABLE INITIALLY DEFERRED
+);
+
+CREATE TABLE "triage_checks" (
+  "run_id" INTEGER NOT NULL,
+  "discard" INTEGER NOT NULL CHECK ("discard" IN (0, 1)),
+  "verdict" TEXT CHECK ("verdict" IN ('benign_true_positive', 'false_positive')),
+  "severity" TEXT CHECK ("severity" IN ('informational', 'low', 'medium', 'high', 'critical')),
+  "reasons_json" TEXT CHECK ("reasons_json" IS NULL OR json_valid("reasons_json")),
+  "references_json" TEXT CHECK ("references_json" IS NULL OR json_valid("references_json")),
+  "guards_json" TEXT CHECK ("guards_json" IS NULL OR json_valid("guards_json")),
+  PRIMARY KEY ("run_id"),
+  FOREIGN KEY ("run_id") REFERENCES "triage_runs" ("run_id") DEFERRABLE INITIALLY DEFERRED
+);
+
+CREATE TABLE "triage_tickets" (
+  "run_id" INTEGER NOT NULL,
+  "alert_id" TEXT NOT NULL,
+  "ticket_id" TEXT,
+  "ticket_json" TEXT NOT NULL CHECK ("ticket_json" IS NULL OR json_valid("ticket_json")),
+  "verdict" TEXT NOT NULL CHECK ("verdict" IN ('true_positive', 'false_positive', 'benign_true_positive', 'needs_more_info')),
+  "severity" TEXT NOT NULL CHECK ("severity" IN ('informational', 'low', 'medium', 'high', 'critical')),
+  "ticket_confidence" REAL CHECK ("ticket_confidence" BETWEEN 0 AND 1),
+  "valid" INTEGER CHECK ("valid" IN (0, 1)),
+  "created_at" TEXT,
+  PRIMARY KEY ("run_id"),
+  FOREIGN KEY ("run_id") REFERENCES "triage_runs" ("run_id") DEFERRABLE INITIALLY DEFERRED,
+  FOREIGN KEY ("alert_id") REFERENCES "alerts" ("alert_id") DEFERRABLE INITIALLY DEFERRED
+);
+
+CREATE TABLE "triage_context_requests" (
+  "run_id" INTEGER NOT NULL,
+  "n" INTEGER NOT NULL,
+  "motivo" TEXT,
+  "comprobacion" TEXT,
+  "consultas_json" TEXT CHECK ("consultas_json" IS NULL OR json_valid("consultas_json")),
+  "rows_json" TEXT CHECK ("rows_json" IS NULL OR json_valid("rows_json")),
+  "is_error" INTEGER CHECK ("is_error" IN (0, 1)),
+  PRIMARY KEY ("run_id", "n"),
+  FOREIGN KEY ("run_id") REFERENCES "triage_runs" ("run_id") DEFERRABLE INITIALLY DEFERRED
+);
+
+CREATE TABLE "analyst_decisions" (
+  "decision_id" INTEGER NOT NULL,
+  "alert_id" TEXT NOT NULL,
+  "run_id" INTEGER,
+  "item" TEXT NOT NULL,
+  "decision" TEXT NOT NULL CHECK ("decision" IN ('accepted', 'rejected')),
+  "override_verdict" TEXT CHECK ("override_verdict" IN ('true_positive', 'false_positive', 'benign_true_positive')),
+  "analyst" TEXT NOT NULL,
+  "comment" TEXT,
+  "decided_at" TEXT NOT NULL,
+  PRIMARY KEY ("decision_id"),
+  FOREIGN KEY ("alert_id") REFERENCES "alerts" ("alert_id") DEFERRABLE INITIALLY DEFERRED,
+  FOREIGN KEY ("run_id") REFERENCES "triage_tickets" ("run_id") DEFERRABLE INITIALLY DEFERRED,
+  CHECK (item = 'verdict' OR (item GLOB 'action:[0-9]*' AND run_id IS NOT NULL))
+);
+
+CREATE TABLE "executed_actions" (
+  "execution_id" INTEGER NOT NULL,
+  "alert_id" TEXT NOT NULL,
+  "run_id" INTEGER,
+  "action_index" INTEGER,
+  "action" TEXT NOT NULL,
+  "target" TEXT NOT NULL,
+  "approval_token" TEXT,
+  "status" TEXT NOT NULL CHECK ("status" IN ('ok', 'refused', 'error')),
+  "api_result_json" TEXT CHECK ("api_result_json" IS NULL OR json_valid("api_result_json")),
+  "executed_at" TEXT NOT NULL,
+  PRIMARY KEY ("execution_id"),
+  FOREIGN KEY ("alert_id") REFERENCES "alerts" ("alert_id") DEFERRABLE INITIALLY DEFERRED,
+  FOREIGN KEY ("run_id") REFERENCES "triage_tickets" ("run_id") DEFERRABLE INITIALLY DEFERRED
+);
+
 CREATE TRIGGER "ad_events_logs_source_insert" BEFORE INSERT ON "ad_events_logs"
 WHEN (SELECT source FROM logs WHERE event_id = NEW.event_id) <> 'ad_events'
 BEGIN SELECT RAISE(ABORT, 'Wrong source for ad_events_logs'); END;

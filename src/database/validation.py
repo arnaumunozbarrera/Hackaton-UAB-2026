@@ -76,7 +76,14 @@ def schema_contract(connection: sqlite3.Connection) -> dict:
     return model
 
 
-def counts_and_distinct(connection: sqlite3.Connection, writer: Writer, model: dict) -> tuple[dict, dict]:
+def observation_table(table: dict) -> bool:
+    """Tables filled from alerts and logs, which a context-only build leaves empty."""
+    return table["group"] == "logs" or table["name"] == "alerts" or table["name"].startswith("alert_")
+
+
+def counts_and_distinct(
+    connection: sqlite3.Connection, writer: Writer, model: dict, *, context_only: bool = False
+) -> tuple[dict, dict]:
     counts, distinct = {}, {}
     for table in model["tables"]:
         name = table["name"]
@@ -85,6 +92,12 @@ def counts_and_distinct(connection: sqlite3.Connection, writer: Writer, model: d
             raise ValueError(f"Lost rows in {name}: wrote {writer.counts[name]}, found {count}")
         counts[name] = count
         distinct[name] = {}
+        if table["group"] == "triage" and count:
+            raise ValueError(f"Source ingestion must not manufacture triage results ({name})")
+        if context_only and observation_table(table):
+            if count:
+                raise ValueError(f"A context-only build must leave {name} empty")
+            continue
         for field in table["fields"]:
             column = identifier(field["name"])
             expression = (
@@ -128,7 +141,7 @@ def validate_sources(connection: sqlite3.Connection, sources: Sources) -> None:
             raise ValueError(f"Input changed during ingestion: {key}")
 
 
-def validate(connection: sqlite3.Connection, sources: Sources, writer: Writer) -> dict:
+def validate(connection: sqlite3.Connection, sources: Sources, writer: Writer, *, context_only: bool = False) -> dict:
     model = schema_contract(connection)
     integrity = connection.execute("PRAGMA integrity_check").fetchall()
     if integrity != [("ok",)]:
@@ -136,7 +149,7 @@ def validate(connection: sqlite3.Connection, sources: Sources, writer: Writer) -
     violations = connection.execute("PRAGMA foreign_key_check").fetchall()
     if violations:
         raise ValueError(f"Foreign key violations: {violations[:5]}")
-    counts, distinct = counts_and_distinct(connection, writer, model)
+    counts, distinct = counts_and_distinct(connection, writer, model, context_only=context_only)
     validate_sources(connection, sources)
     return {
         "integrity_check": "ok",

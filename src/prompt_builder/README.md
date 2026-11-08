@@ -21,20 +21,27 @@ incidentes y la actividad en la ventana (`user_activity`, `host_activity`, `ip_a
 seleccionan columnas concretas, nunca `SELECT *`. `PromptConfig(inline_runbook=True)` vuelve a pegar el runbook
 si el modelo no tiene herramientas.
 
-El ejecutor (`tools.execute`) solo acepta nombres del catálogo, comprueba el número de parámetros, los enlaza con
-`?`, limita a 50 filas y se usa con una conexión de solo lectura (`connect_read_only`).
+El catálogo (`schema.py`) está escrito para `src/database/schema.sql`: las consultas de logs de varias fuentes leen
+la vista `LOG_VIEW` (UNION ALL generado desde la constante `LOG_PROJECTION`) y `log_detail` devuelve la fila de detalle
+completa como JSON. Los parámetros son numerados (`?1`, `?2`...) para poder reutilizar un valor; el ejecutor
+(`tools.execute`) solo acepta nombres del catálogo, comprueba el número de parámetros, los enlaza como mapeo
+(`{"1": ...}`), limita a 50 filas y se usa con una conexión de solo lectura (`connect_read_only`).
 
 ## Personalización
 
 - **Por runbook** (`runbooks.PROFILES`): enfoque, consultas por comprobación y notas obligatorias (por ejemplo,
   IBAN implica escalado y aviso a Tesorería, OT solo se escala, el prompt de Vela es dato no confiable).
-- **Por esquema** (`SchemaMap`): las consultas usan nombres lógicos (`{dim_log}`, `{dim_log.timestamp}`). Si el
-  esquema cambia, basta con un JSON `{"tables": {...}, "columns": {"dim_log": {"timestamp": "ts"}}}` y pasarlo con
-  `--schema-map`. Los identificadores se validan y los valores van siempre como `?`.
+- **Por esquema** (`SchemaMap`): sigue disponible para plantillas con nombres lógicos (`{dim_log.timestamp}`), pero el
+  catálogo actual usa ya los nombres físicos de `schema.sql`. Los identificadores se validan y los valores van siempre
+  como parámetros.
 - **Por despliegue** (`PromptConfig`): empresa, idioma, ventana, máximo de logs, consultas sí o no, y plantillas de
   sistema y de usuario (`templates.py`, con `string.Template`).
-- **Fuente de contexto** (`ContextSource`): hoy `DatasetContextSource` (docs/ + `log_noise_discard`). Una versión
-  sobre la base de datos solo tiene que devolver un `AlertContext`.
+- **Fuente de contexto** (`ContextSource`): `DatabaseContextSource` (`db_context.py`) para el flujo real, sobre la
+  base de datos y con los logs informativos que deciden las comprobaciones básicas (`src.checks`): sin guardas, los
+  eventos explicados sin texto libre se apartan con su referencia; con guardas, todos son informativos.
+  `DatasetContextSource` (docs/ + `log_noise_discard`) se mantiene para el chat temporal y los experimentos.
+- **Runbooks**: `PromptBuilder(source, runbooks=runbooks_from_db(conn))` los lee de la tabla `runbooks`; la política y
+  el esquema del ticket se siguen leyendo de `docs/` (solo lectura).
 
 ## Uso
 
@@ -47,9 +54,10 @@ messages = package.to_messages()      # [{"role": "system", ...}, {"role": "user
 schema = package.response_schema      # para la salida estructurada del LLM
 tool = package.tool                   # definición de solicitar_contexto (respuesta de tipo 2)
 
-# cuando exista la base de datos, el bucle de herramientas solo tiene que hacer:
-# from src.prompt_builder import connect_read_only, execute
-# rows = execute(connect_read_only("db/tarvia_soc.sqlite"), consulta, parametros, allowed=[q.name for q in package.queries])
+# flujo real, sobre la base de datos:
+from src.prompt_builder import DatabaseContextSource, runbooks_from_db
+source = DatabaseContextSource("data/tarvia.sqlite")
+builder = PromptBuilder(source, runbooks=runbooks_from_db(source.conn))
 ```
 
 ```bash

@@ -13,14 +13,22 @@ Usage::
     messages = package.to_messages()          # [{"role": "system", ...}, {"role": "user", ...}]
     schema = package.response_schema          # ticket_salida.schema.json (structured output)
     tool = package.tool                       # solicitar_contexto(motivo, consultas): response type 2
+
+Live workflow (alerts from the API, stored in the database)::
+
+    source = DatabaseContextSource("data/tarvia.sqlite")
+    builder = PromptBuilder(source, runbooks=runbooks_from_db(source.conn))
 """
 
 from .builder import PromptBuilder, PromptConfig, PromptPackage, RenderedQuery
 from .context import AlertContext, ContextSource, DatasetContextSource
+from .db_context import DatabaseContextSource
+from .runbooks import runbooks_from_db
 from .schema import QUERIES, SchemaMap
 from .tools import TOOL_NAME, connect_read_only, execute, tool_definition
 
 __all__ = [
-    "QUERIES", "AlertContext", "ContextSource", "DatasetContextSource", "PromptBuilder", "PromptConfig",
-    "PromptPackage", "RenderedQuery", "SchemaMap", "TOOL_NAME", "connect_read_only", "execute", "tool_definition",
+    "QUERIES", "AlertContext", "ContextSource", "DatabaseContextSource", "DatasetContextSource", "PromptBuilder", "PromptConfig",
+    "PromptPackage", "RenderedQuery", "SchemaMap", "TOOL_NAME", "connect_read_only", "execute", "runbooks_from_db",
+    "tool_definition",
 ]  # fmt: skip

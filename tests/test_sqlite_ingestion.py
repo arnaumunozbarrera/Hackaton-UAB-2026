@@ -138,6 +138,20 @@ def test_failed_rebuild_does_not_replace_existing_file(tmp_path, monkeypatch):
     assert not list(tmp_path.glob(".*.building-*.sqlite"))
 
 
+def test_context_only_build_has_inventory_but_no_alerts_or_logs(tmp_path):
+    output = tmp_path / "context.sqlite"
+    result = build.build_database(output, context_only=True, progress=lambda message: None)
+    assert result["mode"] == "context_only"
+    connection = sqlite3.connect(output)
+    try:
+        for table in ["alerts", "alert_events", "logs", "email_logs", "alert_history"]:
+            assert connection.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0] == 0  # noqa: S608
+        for table in ["users", "assets", "changes", "threat_intelligence", "detection_rules", "runbooks"]:
+            assert connection.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0] > 0  # noqa: S608
+    finally:
+        connection.close()
+
+
 def test_versioned_schema_matches_generator():
     assert SCHEMA_PATH.read_text(encoding="utf-8") == generate_schema()
 
@@ -148,6 +162,9 @@ def loaded_db():
     if not path.exists():
         pytest.skip("Run python -m src.database.build to exercise the ingested dataset")
     connection = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
+    if connection.execute("SELECT COUNT(*) FROM logs").fetchone()[0] == 0:
+        connection.close()
+        pytest.skip("data/tarvia.sqlite is a context-only build; these checks need a full build")
     yield connection
     connection.close()
 

@@ -15,4 +15,6 @@ PK = clave primaria; FK = clave foránea; UK = identificador único indicado en 
 
 Los orígenes completos se muestran en el panel de atributos del visor. En los diagramas, los prefijos `01/` a `05/` abrevian las carpetas `docs/01_contexto/`, `docs/02_inventario/`, `docs/03_alertas/`, `docs/04_logs/` y `docs/05_inteligencia/`. Se indican CSV, JSONL y documentos reales; los Excel de consulta no se presentan como fuentes nuevas.
 
+**Pendiente de regenerar:** `model.json` incluye ya el grupo `triage` (6 tablas de resultados: `triage_runs`, `triage_checks`, `triage_tickets`, `triage_context_requests`, `analyst_decisions`, `executed_actions`; 62 tablas en total), añadido a mano desde `../trazabilidad_bd.md`. Los SVG, PNG, drawio y el visor HTML se generan con una herramienta externa y todavía muestran las 56 tablas originales.
+
 El diseño está implementado en [src/database/schema.sql](../../src/database/schema.sql). N → 1 resume una referencia de muchos registros a uno; las referencias opcionales se aclaran en las notas de la tabla y de la relación.

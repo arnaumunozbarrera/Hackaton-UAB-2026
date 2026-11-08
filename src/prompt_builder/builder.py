@@ -103,11 +103,14 @@ def compress_ids(ids: list[str]) -> str:
 class PromptBuilder:
     """Build compact prompts for alerts from a ContextSource."""
 
-    def __init__(self, source: ContextSource, config: PromptConfig | None = None) -> None:
+    def __init__(
+        self, source: ContextSource, config: PromptConfig | None = None, runbooks: dict[str, Runbook] | None = None
+    ) -> None:
+        """`runbooks` overrides the markdown runbooks (e.g. `runbooks_from_db`); policy and schema stay read-only."""
         self.source = source
         self.cfg = config or PromptConfig()
         ctx_dir = self.cfg.data_dir / "01_contexto"
-        self.runbooks: dict[str, Runbook] = load_runbooks(ctx_dir / "runbooks")
+        self.runbooks: dict[str, Runbook] = runbooks if runbooks is not None else load_runbooks(ctx_dir / "runbooks")
         self.policy: Policy = load_policy(ctx_dir / "politica_soc.md")
         self.output_schema = json.loads((ctx_dir / "ticket_salida.schema.json").read_text(encoding="utf-8"))
         self.system = Template(self.cfg.system_template).substitute(

@@ -70,11 +70,31 @@ python -m src.llm_triage serve --claude-code
 python -m src.llm_triage triage ALR-20261005-000136 --claude-code --model sonnet
 ```
 
-## Sin base de datos
-`DatasetToolBackend` responde las mismas funciones del catálogo desde docs/ y devuelve filas parecidas a las que
-devolverá la BD. Las consultas de actividad (`user_activity`, `ip_activity`...) recorren los logs con un prefiltro de
-texto (de 1 a 5 s por llamada). `incident_links` no está disponible sin la correlación L2. Cuando exista la BD, basta
-con pasar a `TriageRunner` un backend que use `prompt_builder.tools.execute` con `connect_read_only`.
+## Modelo de un clúster (`--llm openai`)
+El flujo por alerta (`python -m src.main`) también puede llamar a un servidor compatible con OpenAI
+(`/v1/chat/completions`: vLLM, SGLang, Ollama, LiteLLM). Lo hace `openai_compat.py`, que traduce el formato de
+mensajes de Anthropic. No lee `ANTHROPIC_API_KEY` ni `TARVIA_LLM_MODEL`.
+
+```bash
+# en .env, sin tocar las líneas de Claude
+TARVIA_OPENAI_BASE_URL=http://host:8000/v1
+TARVIA_OPENAI_MODEL=nombre-que-devuelve-/v1/models
+python -m src.main --llm openai --limit 5
+```
+
+## Backends: base de datos (flujo real) y docs/ (chat temporal)
+- `DatabaseToolBackend(db_path)` (`db_backend.py`) ejecuta las consultas del catálogo `prompt_builder.schema.QUERIES`
+  sobre `TARVIA_DB` abierta en solo lectura (`mode=ro` + `PRAGMA query_only`), con parámetros `?1..?N` y 50 filas
+  como máximo. Es el backend del flujo por alerta (`python -m src.main --llm ...`, ver `src/workflow/`).
+- `DatasetToolBackend` responde las mismas funciones desde docs/; lo sigue usando el chat temporal
+  (`serve`/`triage`, que se mantiene como herramienta heredada). Las consultas de actividad recorren los logs con un
+  prefiltro de texto (de 1 a 5 s por llamada).
+- `incident_links` devuelve siempre una fila fija: la correlación de alertas queda fuera de alcance.
+- Cada entrada `contexto` del transcript lleva también `resultados` (filas por consulta), que el flujo guarda en
+  `triage_context_requests.rows_json` y la web muestra en la pestaña «LLM transcript».
+
+Si `--llm claude-code` termina con «Credit balance is too low», el CLI está autenticado con una cuenta de API sin
+saldo: ejecuta `claude`, `/logout`, `/login` con la cuenta del plan y comprueba `/status`.
 
 ## Tests
 ```powershell

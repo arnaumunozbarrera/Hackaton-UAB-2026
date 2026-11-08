@@ -1,41 +1,450 @@
-const categories=['Transaction anomaly','Access violation','Data integrity','Process deviation','Suspicious behavior'];
-const titles=['Impossible travel detected','Privileged access outside change window','Refund velocity anomaly','New OAuth consent grant','Unusual data export volume','MFA fatigue pattern','Payment beneficiary changed','Service account key rotation','Endpoint beaconing detected','Bulk permission changes','DLP policy violation','Admin login from TOR exit'];
-const severities=['Critical','High','High','Medium','Critical','Medium','High','Low','Critical','Medium','High','Medium'];
-const questions=['Should this transaction be blocked due to suspicious activity?','Should this account be temporarily suspended?','Should this alert be escalated for further investigation?','Should this automated recommendation be approved?'];
-const alerts=titles.map((title,i)=>({id:`ALT-${String(8421+i).padStart(5,'0')}`,title,category:categories[i%categories.length],severity:severities[i],risk:91-i*3,confidence:Math.round((.94-i*.018)*100),time:`${i+2} min ago`,question:questions[i%questions.length],source:['Identity Cloud','ERP Finance','E-commerce API','CloudTrail'][i%4],status:'Pending',operator:i%3===0?'MC':'Unassigned',trigger:['Rule-102 · Geo velocity','Rule-214 · Privilege anomaly','Rule-087 · Rate threshold'][i%3],evidence:`${12+i} related events across ${2+i%3} systems`,comment:''}));
-alerts.forEach((a,i)=>Object.assign(a,{priority:a.severity,waitMinutes:[42,37,31,28,24,21,18,16,12,9,6,3][i],detected:`07 Nov 2026 · 13:${String(50-i*3).padStart(2,'0')}:14`,observed:[47,83,19,11,126,39,4,2,74,16,58,8][i],threshold:[20,50,10,8,100,25,2,1,60,10,40,5][i],impactUsers:[184,62,310,14,480,91,7,3,126,44,230,19][i],affected:[['Identity Cloud','VPN gateway'],['ERP Finance','Payment API'],['E-commerce API','Fraud service'],['CloudTrail','AWS IAM']][i%4],recommendation:['Temporarily block the source account','Suspend the affected beneficiary','Require step-up authentication','Quarantine the session'][i%4],reversible:i%3!==0}));
-const processing=Array.from({length:7},(_,i)=>({id:`ALT-${String(8390+i).padStart(5,'0')}`,desc:['Card testing sequence','Suspicious login cluster','Schema drift in payments','Endpoint behavior deviation','Unusual API token use','Mass mailbox rule creation','Impossible travel detected'][i],severity:['High','Medium','Critical','High','Low','Critical','Medium'][i],stage:['ML analysis','Data enrichment','Rule evaluation','LLM explanation','Decision engine','Data validation','Operator routing'][i],progress:[72,28,91,64,48,17,100][i],elapsed:`0${i+1}:2${i}`,source:['E-commerce API','Identity Cloud','Data Lake','EDR'][i%4]}));
-const history=Array.from({length:10},(_,i)=>({id:`DEC-${String(2101+i).padStart(4,'0')}`,alert:`ALT-${String(8370+i).padStart(5,'0')}`,category:categories[(i+2)%categories.length],severity:['Critical','High','Medium','Low'][i%4],maker:i%3===0?'M. Chen':i%3===1?'Rule Engine':'ML Model',type:i%3===0?'Human':i%3===1?'Rule Engine':'ML Model',action:['Blocked transaction','Routed to queue','Closed as benign','Suspended account'][i%4],outcome:i%3===2?'Overridden':'Confirmed',risk:88-i*4,confidence:94-i*2,status:'Resolved',time:`07 Nov 2026 · 1${i}:2${i}` }));
-const QUEUE_PAGE_SIZE=6;
-let state={page:'ops',expanded:null,selected:null,selectedAlert:null,filter:'',severity:'All',queuePage:1,toast:null,alerts:[...alerts],chatLoading:false,chatMessages:[]};
-const app=document.querySelector('#app');
-const esc=s=>String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
-function icon(x){return `<span class="nav-icon">${x}</span>`}
-function shell(content){return `<div class="app"><aside class="sidebar"><div class="brand"><span class="mark">S</span><span>sentinel</span></div><div class="nav-label">Workspace</div><nav class="nav"><button class="${state.page==='ops'?'active':''}" data-page="ops">${icon('◈')}<span>Operations center</span></button><button class="${state.page==='history'?'active':''}" data-page="history">${icon('≡')}<span>Decision history</span></button></nav><div class="side-bottom"><small><span class="status-dot"></span>Processing engine<br/>Operational</small><div class="profile"><span class="avatar">PG</span><span><b>Paco Gonzalez</b><small>Senior analyst</small></span></div></div></aside><main class="main"><header class="topbar"><div><div class="eyebrow">TARVIA SOC / ${state.page==='ops'?'OPERATIONS':'AUDIT LEDGER'}</div><h1>${state.page==='ops'?'Alert operations center':'Decision history'}</h1></div><div class="top-actions"><span class="env">DEMO · Production mirror</span><span><span class="status-dot"></span>All systems operational</span><span class="notify">♧<i class="badge">3</i></span><span class="mono">07 NOV 2026 · 14:32:08 CET</span></div></header>${content}</main></div>`}
-function severity(s){return `<span class="tag ${s.toLowerCase()}">${s}</span>`}
-function ticket(a){return `<article class="ticket" data-alert="${a.id}"><div class="ticket-top"><span style="display:flex;align-items:center;gap:6px"><span class="priority ${a.priority.toLowerCase()}">${a.priority==='Critical'?'Immediate action':a.priority==='High'?'Urgent':a.priority==='Medium'?'Normal':'Non-urgent'}</span>${severity(a.severity)}</span><span class="mono">${a.id}</span></div><h4>${esc(a.title)}</h4><div class="question">${esc(a.question)}</div><div class="ticket-meta"><span>${a.category}</span><span>${a.source}</span><span>Waiting ${a.waitMinutes}m</span><span>Pending approval</span></div><div class="ticket-bottom"><span class="risk">Risk ${a.risk}/100 <span style="color:var(--muted);font-weight:400">· ${a.trigger}</span></span><span>${a.operator==='Unassigned'?'<span class="mono">Unassigned</span>':'<span class="mini-avatar">PG</span>'}</span></div></article>`}
-function approval(){const rank={Critical:0,High:1,Medium:2,Low:3};const list=state.alerts.filter(a=>a.status==='Pending'&&(!state.filter||(`${a.id} ${a.title} ${a.category} ${a.source}`).toLowerCase().includes(state.filter.toLowerCase()))&&(state.severity==='All'||a.severity===state.severity)).sort((a,b)=>(rank[a.priority]-rank[b.priority])||(b.waitMinutes-a.waitMinutes));return `<section class="panel"><div class="panel-head"><div class="panel-title"><span style="color:var(--orange)">◉</span><div><h3>Operator approval queue</h3><p>Prioritized by urgency · oldest first</p></div><span class="count">${list.length} pending</span></div><button class="expand" data-expand="approval">⛶</button></div><div class="panel-body"><div class="filters" style="padding:0;border:0;margin:0 0 11px"><input id="queue-search" placeholder="Search alerts..." value="${esc(state.filter)}" style="min-width:0;width:100%"/><select id="queue-severity" style="width:100%"><option>All priorities</option>${['Critical','High','Medium','Low'].map(x=>`<option ${state.severity===x?'selected':''}>${x}</option>`).join('')}</select></div><div class="priority-note"><span class="priority critical">Immediate action</span><span class="priority high">Urgent</span><span class="priority medium">Normal</span><span class="priority low">Non-urgent</span></div>${list.length?list.map(ticket).join(''):'<div class="empty">No alerts match these filters.<br/>The queue is clear.</div>'}</div></section>`}
-function analytics(){return `<section class="panel"><div class="panel-head"><div class="panel-title"><span style="color:var(--blue)">◌</span><div><h3>Real-time analytics</h3><p>Operational performance · last 24 hours</p></div></div><button class="expand" data-expand="analytics">⛶</button></div><div class="panel-body"><div class="kpis"><div class="kpi"><span class="kpi-label">Alerts received</span><span class="kpi-val">2,481</span><span class="delta">↑ 8.4%</span></div><div class="kpi"><span class="kpi-label">In processing</span><span class="kpi-val">37</span><span class="delta">live</span></div><div class="kpi"><span class="kpi-label">Awaiting approval</span><span class="kpi-val">${state.alerts.filter(a=>a.status==='Pending').length}</span></div><div class="kpi"><span class="kpi-label">Auto-resolved</span><span class="kpi-val">1,948</span><span class="delta">78.5%</span></div><div class="kpi"><span class="kpi-label">Critical alerts</span><span class="kpi-val">18</span><span class="delta" style="color:var(--red)">↑ 2</span></div><div class="kpi"><span class="kpi-label">False positive rate</span><span class="kpi-val">4.8%</span><span class="delta">↓ 0.6%</span></div><div class="kpi"><span class="kpi-label">Avg. processing time</span><span class="kpi-val">02:14</span></div><div class="kpi"><span class="kpi-label">Human intervention</span><span class="kpi-val">12.6%</span></div></div><div class="chart-card"><div class="chart-title">Alert volume <span>Hourly · UTC</span></div><div class="line-chart"><svg viewBox="0 0 300 90" preserveAspectRatio="none"><polyline points="0,67 25,53 50,59 75,38 100,47 125,27 150,42 175,30 200,18 225,33 250,22 275,10 300,18" fill="none" stroke="#86bc25" stroke-width="2"/><polyline points="0,76 25,70 50,73 75,56 100,63 125,48 150,57 175,45 200,41 225,48 250,37 275,28 300,33" fill="none" stroke="#0076a8" stroke-width="2"/></svg></div><div class="legend"><span><i></i>Received</span><span><i class="blue"></i>Processed</span></div></div><div class="chart-card"><div class="chart-title">Alert distribution <span>By severity</span></div><div class="donut-wrap"><div class="donut"></div><div class="donut-legend"><span><b style="color:var(--red)">12%</b> Critical</span><span><b style="color:var(--orange)">31%</b> High</span><span><b style="color:#aa8a16">30%</b> Medium</span><span><b style="color:var(--deep)">27%</b> Low</span></div></div></div><div class="chart-card"><div class="chart-title">Alerts by category <span>Today</span></div><div class="bars">${[['Transaction anomalies',82],['Access violations',64],['Data integrity',48],['Process deviations',35],['Suspicious behavior',27]].map(([x,n])=>`<div class="bar-row"><span>${x}</span><div class="bar-track"><div class="bar-fill" style="width:${n}%"></div></div><b>${n}</b></div>`).join('')}</div></div></div></section>`}
-function monitor(){return `<section class="panel"><div class="panel-head"><div class="panel-title"><span style="color:var(--green)">↻</span><div><h3>Processing monitor</h3><p>Automated pipeline activity</p></div><span class="count"><span class="status-dot"></span>Live</span></div><button class="expand" data-expand="monitor">⛶</button></div><div class="panel-body"><div class="process-card"><div class="process-row"><h4>Currently processing</h4><span class="mono">7 alerts</span></div>${processing.slice(0,3).map(p=>`<div style="padding:9px 0;border-top:1px solid #eef0ed"><div class="process-row"><span><b class="mono">${p.id}</b> · ${p.desc}</span>${severity(p.severity)}</div><div class="process-row" style="font-size:10px;color:var(--muted)"><span>${p.stage} · ${p.elapsed}</span><span>${p.progress}%</span></div><div class="progress"><span style="width:${p.progress}%"></span></div></div>`).join('')}</div><div class="process-card"><div class="process-row"><h4>Lifecycle · ALT-08394</h4><span class="mono">01:28 elapsed</span></div><div class="stage-line">${['Detected','Enriched','Validated','Rules','ML / LLM','Decision','Resolved'].map((x,i)=>`<div class="stage ${i<4?'done':''} ${i===4?'active':''}">${x}</div>`).join('')}</div><div class="mono">Current stage: LLM explanation generation</div></div><div class="process-card"><div class="process-row"><h4>Automated actions log</h4><span class="mono">Newest first</span></div>${[['14:31:54','ALT-08394','Risk score calculated · 91/100','ML Model'],['14:31:49','ALT-08394','Rule RULE-102 triggered','Rule Engine'],['14:31:42','ALT-08393','Alert successfully enriched','Data Pipeline'],['14:31:36','ALT-08392','Routed to operator queue','Decision Engine'],['14:31:21','ALT-08391','Automatic action executed','Decision Engine']].map(l=>`<div class="log"><span class="log-time">${l[0]}</span><div class="log-text"><b>${l[1]}</b> · ${l[2]}<br/><span class="component">${l[3]}</span></div></div>`).join('')}</div></div></section>`}
-function ops(){return `<div class="workspace"><div class="page-intro"><div><h2>Good afternoon, Paco</h2><p>Here’s the current state of your alert ecosystem.</p></div><div class="refresh"><span class="status-dot"></span>Updated 12 seconds ago</div></div><div class="grid">${approval()}${analytics()}${monitor()}</div></div>`}
-function historyPage(){const rows=history.filter(x=>!state.filter||(`${x.id} ${x.alert} ${x.maker} ${x.category}`).toLowerCase().includes(state.filter.toLowerCase()));return `<div class="history-page"><div class="page-intro"><div><h2>Decision ledger</h2><p>Trace every automated and human decision from detection to execution.</p></div><div class="refresh">10,284 records · Retention 365 days</div></div><div class="filters"><input id="history-search" placeholder="Search decision ID, alert ID, category..." value="${esc(state.filter)}"/><select><option>All decision makers</option><option>Human operator</option><option>Rule Engine</option><option>ML Model</option></select><select><option>All severities</option><option>Critical</option><option>High</option><option>Medium</option></select><select><option>All outcomes</option><option>Confirmed</option><option>Overridden</option></select><button class="env" style="border:1px solid var(--line);background:#fff;color:var(--ink)">Export CSV ↓</button></div><div class="table-wrap"><table class="table"><thead><tr><th>Timestamp</th><th>Alert ID</th><th>Category</th><th>Severity</th><th>Decision maker</th><th>Type</th><th>Action taken</th><th>Outcome</th><th>Risk</th><th>Confidence</th><th>Status</th></tr></thead><tbody>${rows.map(x=>`<tr data-decision="${x.id}"><td class="mono">${x.time}</td><td class="mono">${x.alert}</td><td>${x.category}</td><td>${severity(x.severity)}</td><td>${x.maker}</td><td>${x.type}</td><td>${x.action}</td><td><span class="pill ${x.outcome==='Confirmed'?'success':'warn'}">${x.outcome}</span></td><td><b>${x.risk}</b></td><td>${x.confidence}%</td><td><span class="pill success">${x.status}</span></td></tr>`).join('')}</tbody></table></div>${rows.length?'':'<div class="empty">No decision records match your search.</div>'}</div>`}
-function drawer(){if(!state.selected)return '';const x=history.find(h=>h.id===state.selected)||history[0];return `<div class="drawer-backdrop" data-close><aside class="drawer"><div class="drawer-head"><div><span class="mono">${x.id} · AUDIT INSPECTOR</span><h2>${x.alert}</h2><span class="pill success">${x.status}</span></div><button class="close" data-close>×</button></div><div class="detail-section"><h4>Original alert</h4><div class="detail-grid"><div><small>Category</small>${x.category}</div><div><small>Severity</small>${severity(x.severity)}</div><div><small>Risk score</small><b>${x.risk}/100</b></div><div><small>Detected</small><span class="mono">07 Nov 2026 · 10:48:19</span></div></div></div><div class="detail-section"><h4>Automated analysis</h4><p style="font-size:12px;line-height:1.5">Multiple correlated signals indicate a likely policy violation. The system recommends containment based on activity across Identity Cloud and E-commerce API.</p><div class="detail-grid"><div><small>Rules triggered</small>RULE-102, RULE-214</div><div><small>Model confidence</small>${x.confidence}%</div><div><small>LLM explanation</small>Generated · reviewed</div><div><small>Recommendation</small>${x.action}</div></div></div><div class="detail-section"><h4>Operator decision</h4><div class="detail-grid"><div><small>Decision maker</small>${x.maker}</div><div><small>Decision type</small>${x.type}</div><div><small>Outcome</small>${x.outcome}</div><div><small>Comment</small>Validated against runbook RB-04.</div></div></div><div class="detail-section"><h4>Decision timeline</h4><div class="timeline"><div class="timeline-item"><strong>Alert detected</strong><p>07 Nov · 10:48:19 · Data Pipeline</p></div><div class="timeline-item"><strong>Rules evaluated</strong><p>07 Nov · 10:48:26 · Rule Engine · 2 rules triggered</p></div><div class="timeline-item"><strong>Model recommendation</strong><p>07 Nov · 10:48:41 · ML Model · ${x.confidence}% confidence</p></div><div class="timeline-item"><strong>${x.outcome==='Confirmed'?'Operator accepted recommendation':'Operator overrode recommendation'}</strong><p>07 Nov · 10:51:04 · ${x.maker}</p></div><div class="timeline-item"><strong>Action executed</strong><p>07 Nov · 10:51:06 · Decision Engine · Success</p></div></div></div></aside></div>`}
-function investigation(a){return `<div class="investigation-backdrop" data-close-investigation><aside class="investigation"><div class="investigation-head"><div><span class="mono">INVESTIGATION WORKSPACE · ${a.id}</span><h2>${esc(a.title)}</h2><div class="investigation-tags"><span class="priority ${a.priority.toLowerCase()}">${a.priority}</span>${severity(a.severity)}<span class="pill">${a.status}</span></div></div><button class="close" data-close-investigation>×</button></div><div class="investigation-body"><section class="investigation-section"><h3>Alert overview</h3><p class="lead">${esc(a.title)} represents a potentially harmful activity detected in ${a.source}. The automated system routed it here because the recommended action requires human authorization.</p><div class="detail-grid"><div><small>Alert ID</small><span class="mono">${a.id}</span></div><div><small>Detected</small><span class="mono">${a.detected}</span></div><div><small>Affected service</small>${a.source}</div><div><small>Current status</small>${a.status}</div><div><small>Category</small>${a.category}</div><div><small>Risk / confidence</small><b>${a.risk}/100</b> · ${a.confidence}%</div></div></section><section class="investigation-section"><h3>What triggered the alert?</h3><div class="signal"><b>Observed condition</b><span>${a.observed} events in the last 3 minutes</span><small>Allowed threshold: ${a.threshold} events · Triggered at ${a.detected}</small></div><p>The system detected an unusual increase in activity that exceeds the configured operating baseline. This is the primary event that created the alert.</p><div class="evidence-row"><span class="evidence-check">✓</span><span><b>${a.evidence}</b><small>Corroborating evidence across identity, network, and application telemetry</small></span></div></section><section class="investigation-section"><h3>Affected systems & potential impact</h3><div class="systems">${a.affected.map((s,i)=>`<div class="system"><span class="system-dot ${i?'connected':''}"></span><div><b>${s}</b><small>${i?'Downstream dependency':'Primary affected system'} · ${i?'Connected dependency':'Active signal source'}</small></div></div>`).join('')}</div><div class="impact"><b>Potential impact</b><span>${a.impactUsers} users or service processes could be affected if the activity continues.</span></div></section><section class="investigation-section"><h3>Why classified as a true positive?</h3><div class="analysis-grid"><div><small>Detection rules</small><b>${a.trigger}</b><span>Threshold exceeded by ${Math.round((a.observed/a.threshold)*100-100)}%</span></div><div><small>Model confidence</small><b>${a.confidence}%</b><span>Potential true positive</span></div></div><p class="explanation"><b>AI-generated explanation</b><br/>Signals are consistent with a genuine policy violation because the behavior is anomalous for this entity, exceeds the configured threshold, and is corroborated by related events. Confidence is a recommendation strength, not proof of intent.</p></section><section class="investigation-section approval-reason"><h3>Why operator approval is required</h3><p>The proposed action may interrupt a connected service and is classified as a high-impact containment step. Operational policy requires human authorization before execution.</p><span class="policy">POLICY GATE · High-impact action</span></section><section class="investigation-section recommendation"><h3>Recommended action</h3><div class="recommendation-main"><div><small>System recommendation</small><strong>${a.recommendation}</strong></div><span class="pill success">${a.confidence}% strength</span></div><div class="detail-grid"><div><small>Expected result</small>Stop further suspicious activity</div><div><small>Side effect</small>May interrupt an active session</div><div><small>Reversibility</small>${a.reversible?'Reversible':'Requires manual recovery'}</div><div><small>Actually executed</small><b>Not yet executed</b></div></div></section></div><div class="investigation-footer"><textarea id="decision-comment" placeholder="Optional justification for your decision..."></textarea><div class="decision-actions"><button class="action secondary" data-investigation-action="investigate">Request more information</button><button class="action outline" data-investigation-action="escalate">Escalate</button><button class="action danger" data-investigation-action="reject">Reject action</button><button class="action primary" data-investigation-action="approve">Approve action</button></div></div></aside></div>`}
-function getApprovalList(){const rank={Critical:0,High:1,Medium:2,Low:3};return state.alerts.filter(a=>a.status==='Pending'&&(!state.filter||(`${a.id} ${a.title} ${a.category} ${a.source}`).toLowerCase().includes(state.filter.toLowerCase()))&&(state.severity==='All'||a.severity===state.severity)).sort((a,b)=>(rank[a.priority]-rank[b.priority])||(b.waitMinutes-a.waitMinutes))}
-function approval(){const list=getApprovalList();const pageCount=Math.max(1,Math.ceil(list.length/QUEUE_PAGE_SIZE));state.queuePage=Math.min(state.queuePage,pageCount);const start=(state.queuePage-1)*QUEUE_PAGE_SIZE;const visible=list.slice(start,start+QUEUE_PAGE_SIZE);const end=Math.min(start+visible.length,list.length);return `<section class="panel"><div class="panel-head"><div class="panel-title"><span style="color:var(--orange)">!</span><div><h3>Operator approval queue</h3><p>Prioritized by urgency &middot; oldest first</p></div><span class="count">${list.length} pending</span></div><button class="expand" data-expand="approval">[ ]</button></div><div class="panel-body"><div class="filters" style="padding:0;border:0;margin:0 0 11px"><input id="queue-search" placeholder="Search alerts..." value="${esc(state.filter)}" style="min-width:0;width:100%"/><select id="queue-severity" style="width:100%"><option>All priorities</option>${['Critical','High','Medium','Low'].map(x=>`<option ${state.severity===x?'selected':''}>${x}</option>`).join('')}</select></div><div class="priority-note"><span class="priority critical">Immediate action</span><span class="priority high">Urgent</span><span class="priority medium">Normal</span><span class="priority low">Non-urgent</span></div>${visible.length?visible.map(ticket).join(''):'<div class="empty">No alerts match these filters.<br/>The queue is clear.</div>'}</div><footer class="queue-footer"><span>Showing ${list.length?start+1:0}&ndash;${end} of ${list.length} alerts</span><span class="queue-pagination"><button data-queue-page="${state.queuePage-1}" ${state.queuePage===1?'disabled':''}>Previous</button>${Array.from({length:pageCount},(_,i)=>`<button data-queue-page="${i+1}" class="${state.queuePage===i+1?'current':''}">${i+1}</button>`).join('')}<button data-queue-page="${state.queuePage+1}" ${state.queuePage===pageCount?'disabled':''}>Next</button></span></footer></section>`}
-function shell(content){return `<div class="app"><aside class="sidebar"><div class="brand"><span class="mark">S</span><span>sentinel</span></div><div class="nav-label">Workspace</div><nav class="nav"><button class="${state.page==='ops'?'active':''}" data-page="ops">${icon('◈')}<span>Operations center</span></button><button class="${state.page==='history'?'active':''}" data-page="history">${icon('≡')}<span>Decision history</span></button><button class="${state.page==='assistant'?'active':''}" data-page="assistant">${icon('✦')}<span>AI Intelligence Assistant</span></button></nav><div class="side-bottom"><small><span class="status-dot"></span>Processing engine<br/>Operational</small><div class="profile"><span class="avatar">PG</span><span><b>Paco Gonzalez</b><small>Senior analyst</small></span></div></div></aside><main class="main"><header class="topbar"><div><div class="eyebrow">TARVIA SOC / ${state.page==='ops'?'OPERATIONS':state.page==='assistant'?'INTELLIGENCE ASSISTANT':'AUDIT LEDGER'}</div><h1>${state.page==='ops'?'Alert operations center':state.page==='assistant'?'AI Intelligence Assistant':'Decision history'}</h1></div><div class="top-actions"><span class="env">DEMO · Production mirror</span><span><span class="status-dot"></span>All systems operational</span><span class="notify">♧<i class="badge">3</i></span><span class="mono">07 NOV 2026 · 14:32:08 CET</span></div></header>${content}</main></div>`}
-function assistantPage(){const welcome=!state.chatMessages.length;return `<div class="assistant-page"><section class="assistant-hero"><div class="assistant-mark">✦</div><div><span class="assistant-kicker">READ-ONLY ALERT INTELLIGENCE</span><h2>AI Intelligence Assistant</h2><p>Search the alert data layer in plain language and jump directly into the evidence.</p></div><span class="assistant-ready"><span class="status-dot"></span>Ready</span></section><section class="assistant-shell"><div class="assistant-messages">${welcome?`<div class="assistant-welcome"><span class="welcome-icon">✦</span><h3>How can I help investigate?</h3><p>Ask about priority, status, affected services, or pending operator decisions.</p><div class="welcome-prompts"><button data-suggestion="Show me all critical alerts">Show all critical alerts</button><button data-suggestion="Find alerts pending operator approval">Find pending approvals</button><button data-suggestion="Find alerts related to payment processing">Payment processing alerts</button><button data-suggestion="Which services are generating the most alerts?">Top alert services</button></div></div>`:state.chatMessages.map(m=>`<div class="chat-message ${m.role}"><div class="chat-avatar ${m.role==='assistant'?'ai':''}">${m.role==='assistant'?'✦':'PG'}</div><div class="chat-bubble">${m.html||esc(m.text)}</div></div>`).join('')}${state.chatLoading?'<div class="chat-message assistant"><div class="chat-avatar ai">✦</div><div class="chat-bubble loading"><span></span><span></span><span></span> Searching alert data…</div></div>':''}</div><form class="assistant-composer" id="assistant-form"><input id="assistant-input" autocomplete="off" placeholder="Ask about alerts, priorities, services, or status…"/><button type="submit" ${state.chatLoading?'disabled':''}>Send <span>↗</span></button></form></section></div>`}
-function assistantQuery(query){const q=query.toLowerCase();const results=state.alerts.filter(a=>(!q.includes('critical')||a.priority==='Critical')&&(!q.includes('high')||a.priority==='High')&&(!q.includes('medium')||a.priority==='Medium')&&(!q.includes('low')||a.priority==='Low')&&(!q.includes('pending')||a.status==='Pending')&&(!/payment|transaction|processing/.test(q)||/payment|transaction|refund|e-commerce|erp/i.test(`${a.title} ${a.category} ${a.source}`))&&(!/service|identity|access|login/.test(q)||/identity|access|login|oauth|mfa|cloudtrail/i.test(`${a.title} ${a.category} ${a.source}`)));const rows=results.slice(0,8);if(!rows.length)return{text:'No matching alert records were found. Try a broader priority, status, or service filter.'};const html=`<p>I found ${results.length} matching alert record${results.length===1?'':'s'} in the available read-only alert data.</p><div class="assistant-results">${rows.map(a=>`<button class="assistant-result" data-chat-alert="${a.id}"><span><b class="mono">${a.id}</b><strong>${esc(a.title)}</strong><small>${esc(a.source)} · ${esc(a.category)}</small></span><span><span class="priority ${a.priority.toLowerCase()}">${a.priority}</span><small>${a.status}</small></span></button>`).join('')}</div><small class="assistant-source">Read-only data layer · ${results.length} record${results.length===1?'':'s'} matched</small>`;return{html}}
-function submitAssistant(query){const clean=query.trim();if(!clean||state.chatLoading)return;state.chatMessages.push({role:'user',text:clean});state.chatLoading=true;render();setTimeout(()=>{state.chatMessages.push({role:'assistant',...assistantQuery(clean)});state.chatLoading=false;render()},450)}
-function expandIcon(){return '<svg class="expand-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M3 8V3h5M12 3h5v5M3 12v5h5M17 12v5h-5"/></svg>'}
-function render(){const page=state.page==='ops'?ops():state.page==='assistant'?assistantPage():historyPage();const content=shell(page).replaceAll('[ ]',expandIcon()).replaceAll('⛶',expandIcon());app.innerHTML=content+drawer()+(state.selectedAlert?investigation(state.selectedAlert):'');bind();}
-function toast(msg){state.toast=msg;document.querySelector('.toast')?.remove();const el=document.createElement('div');el.className='toast';el.textContent=msg;document.body.appendChild(el);setTimeout(()=>el.remove(),2600)}
-function bind(){document.querySelectorAll('[data-page]').forEach(b=>b.onclick=()=>{state.page=b.dataset.page;state.filter='';state.selected=null;state.selectedAlert=null;render()});document.querySelectorAll('[data-expand]').forEach(b=>b.onclick=()=>{state.expanded=b.dataset.expand;const panel=b.closest('.panel');panel.classList.add('full');panel.querySelector('.panel-head').insertAdjacentHTML('beforeend','<button class="close full-close" data-unexpand>×</button>');panel.querySelector('[data-unexpand]').onclick=()=>{state.expanded=null;render()}});document.querySelectorAll('[data-alert]').forEach(x=>x.onclick=()=>{state.selectedAlert=state.alerts.find(a=>a.id===x.dataset.alert)||null;render()});document.querySelectorAll('[data-decision]').forEach(x=>x.onclick=()=>{state.selected=x.dataset.decision;render()});document.querySelectorAll('[data-close]').forEach(x=>x.onclick=()=>{state.selected=null;render()});document.querySelectorAll('[data-close-investigation]').forEach(x=>x.onclick=e=>{if(e.target===x||e.target.closest('.close')){state.selectedAlert=null;render()}});document.querySelectorAll('[data-investigation-action]').forEach(x=>x.onclick=()=>{if(state.selectedAlert)makeDecision(state.selectedAlert,x.dataset.investigationAction)});const q=document.querySelector('#queue-search');if(q)q.oninput=e=>{state.filter=e.target.value;render();document.querySelector('#queue-search')?.focus()};const qs=document.querySelector('#queue-severity');if(qs)qs.onchange=e=>{state.severity=e.target.value==='All priorities'?'All':e.target.value;render()};const hs=document.querySelector('#history-search');if(hs)hs.oninput=e=>{state.filter=e.target.value;render();document.querySelector('#history-search')?.focus()}}
-function makeDecision(a,action){const comment=document.querySelector('#decision-comment')?.value||'';a.status=action==='approve'?'Approved':action==='reject'?'Rejected':action==='escalate'?'Escalated':'Investigation requested';a.comment=comment;history.unshift({id:`DEC-${String(2200+history.length).padStart(4,'0')}`,alert:a.id,category:a.category,severity:a.severity,maker:'Paco Gonzalez',type:'Human',action:a.status,outcome:action==='approve'?'Confirmed':'Overridden',risk:a.risk,confidence:a.confidence,status:'Resolved',time:'07 Nov 2026 · 14:32'});state.selectedAlert=null;toast(`${a.id} marked ${a.status.toLowerCase()} · decision recorded`);render()}
+// Sentinel analyst UI on real data from the workflow database (src/webapp, /api/*).
+// Every value is rendered as text (el() + text nodes): alert fields, logs and model output are attacker-influenced.
+'use strict';
+
+const QUEUE_PAGE_SIZE = 6;
+const REFRESH_MS = 10000;
+const ANALYST_KEY = 'tarvia.analyst';
+const REVIEW = ['awaiting_analyst', 'auto_closed'];
+const WORKING = ['new', 'pending_llm', 'in_llm', 'llm_error'];
+const STATUS_LABEL = {
+  new: 'New', pending_llm: 'Kept, LLM pending', in_llm: 'In LLM', llm_error: 'LLM error',
+  auto_closed: 'Auto-closed (to confirm)', awaiting_analyst: 'Awaiting analyst', accepted: 'Accepted', rejected: 'Rejected',
+};
+const VERDICTS = ['true_positive', 'benign_true_positive', 'false_positive'];
+const SEV_RANK = { critical: 0, high: 1, medium: 2, low: 3, informational: 4 };
+
+const state = {
+  page: 'ops', alerts: [], stats: null, decisions: [], config: {}, filter: '', status: 'review', queuePage: 1,
+  open: null, detail: null, tab: 'alert', toast: null, error: null, updated: null,
+  analyst: localStorage.getItem(ANALYST_KEY) || '',
+};
+const root = document.querySelector('#app');
+
+// ------------------------------------------------------------------ DOM helper (no innerHTML anywhere)
+function el(tag, attrs, ...children) {
+  const node = document.createElement(tag);
+  for (const [key, value] of Object.entries(attrs || {})) {
+    if (value === null || value === undefined || value === false) continue;
+    if (key === 'class') node.className = value;
+    else if (key === 'text') node.textContent = String(value);
+    else if (key.startsWith('on')) node.addEventListener(key.slice(2), value);
+    else if (key === 'value') node.value = value;
+    else node.setAttribute(key, value === true ? '' : String(value));
+  }
+  for (const child of children.flat(Infinity)) {
+    if (child === null || child === undefined || child === false) continue;
+    node.append(child instanceof Node ? child : document.createTextNode(String(child)));
+  }
+  return node;
+}
+const fmtTime = (ts) => (ts ? String(ts).replace('T', ' ').slice(0, 16) + ' UTC' : '—');
+const pretty = (value) => el('pre', { class: 'json', text: JSON.stringify(value, null, 2) });
+const sevTag = (s) => el('span', { class: `tag ${s || ''}`, text: s || '—' });
+const origin = (o) => el('span', { class: 'who ai', text: o === 'auto_check' ? 'AI · basic checks' : 'AI · LLM' });
+const human = (name) => el('span', { class: 'who human', text: `Human · ${name}` });
+
+// ------------------------------------------------------------------ API
+async function api(path, options) {
+  const response = await fetch(path, options);
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(body.detail ? (typeof body.detail === 'string' ? body.detail : JSON.stringify(body.detail)) : response.statusText);
+  return body;
+}
+
+async function refresh() {
+  try {
+    const [alerts, stats, decisions] = await Promise.all([api('/api/alerts'), api('/api/stats'), api('/api/decisions')]);
+    Object.assign(state, { alerts, stats, decisions, error: null, updated: new Date() });
+    if (state.open) state.detail = await api(`/api/alerts/${encodeURIComponent(state.open)}`);
+  } catch (err) {
+    state.error = `Cannot reach the triage API: ${err.message}`;
+  }
+  render();
+}
+
+async function openAlert(alertId) {
+  state.open = alertId;
+  state.tab = 'alert';
+  state.detail = null;
+  render();
+  try {
+    state.detail = await api(`/api/alerts/${encodeURIComponent(alertId)}`);
+  } catch (err) {
+    toast(err.message);
+  }
+  render();
+}
+
+async function sendDecision(body) {
+  if (!state.analyst.trim()) return toast('Write your analyst name first (left sidebar).');
+  try {
+    const result = await api(`/api/alerts/${encodeURIComponent(state.open)}/decisions`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ analyst: state.analyst.trim(), ...body }),
+    });
+    const ex = result.execution;
+    toast(ex ? (ex.status ? `${ex.action} on ${ex.target}: ${ex.status}${ex.result && ex.result.detail ? ' — ' + ex.result.detail : ''}` : ex.reason)
+      : result.alert_history ? `Verdict stored: ${result.alert_history}` : `Decision stored (${result.decision})`);
+  } catch (err) {
+    toast(`Not stored: ${err.message}`);
+  }
+  await refresh();
+}
+
+function toast(message) {
+  state.toast = message;
 render();
-document.addEventListener('click',e=>{const expand=e.target.closest('[data-expand]');if(!expand)return;e.preventDefault();e.stopImmediatePropagation();if(state.expanded)return;state.expanded=expand.dataset.expand;const panel=expand.closest('.panel');panel.classList.add('full');expand.hidden=true;document.querySelectorAll('[data-expand]').forEach(b=>b.disabled=true);const close=document.createElement('button');close.className='close full-close';close.type='button';close.setAttribute('aria-label','Close fullscreen panel');close.textContent='×';close.onclick=()=>{state.expanded=null;render()};panel.querySelector('.panel-head').appendChild(close)},true);
-document.addEventListener('click',e=>{const suggestion=e.target.closest('[data-suggestion]');if(suggestion){submitAssistant(suggestion.dataset.suggestion);return}const result=e.target.closest('[data-chat-alert]');if(result){const alert=state.alerts.find(a=>a.id===result.dataset.chatAlert);if(alert){state.page='ops';state.selectedAlert=alert;render()}}});
-document.addEventListener('submit',e=>{if(e.target.id!=='assistant-form')return;e.preventDefault();const input=document.querySelector('#assistant-input');if(input)submitAssistant(input.value)},true);
-document.addEventListener('click',e=>{const pageButton=e.target.closest('[data-queue-page]');if(pageButton&&!pageButton.disabled){state.queuePage=Number(pageButton.dataset.queuePage);render()}});
-document.addEventListener('input',e=>{if(e.target.id==='queue-search')state.queuePage=1},true);
-document.addEventListener('change',e=>{if(e.target.id==='queue-severity')state.queuePage=1},true);
+  clearTimeout(toast.timer);
+  toast.timer = setTimeout(() => { state.toast = null; render(); }, 6000);
+}
+
+// ------------------------------------------------------------------ shell
+function shell(content) {
+  const nav = (page, icon, label) => el('button', { class: state.page === page ? 'active' : '', onclick: () => { state.page = page; render(); } },
+    el('span', { class: 'nav-icon', text: icon }), el('span', { text: label }));
+  const analyst = el('input', {
+    class: 'analyst-input', placeholder: 'Analyst name', value: state.analyst, 'aria-label': 'Analyst name',
+    onchange: (e) => { state.analyst = e.target.value.trim(); localStorage.setItem(ANALYST_KEY, state.analyst); render(); },
+  });
+  const pending = state.alerts.filter((a) => REVIEW.includes(a.status)).length;
+  return el('div', { class: 'app' },
+    el('aside', { class: 'sidebar' },
+      el('div', { class: 'brand' }, el('span', { class: 'mark', text: 'S' }), el('span', { text: 'sentinel' })),
+      el('div', { class: 'nav-label', text: 'Workspace' }),
+      el('nav', { class: 'nav' }, nav('ops', '◈', 'Operations center'), nav('history', '≡', 'Decision history')),
+      el('div', { class: 'side-bottom' },
+        el('small', {}, el('span', { class: 'status-dot' }), state.error ? 'Triage API unreachable' : 'Triage API connected'),
+        el('div', { class: 'profile' }, el('span', { class: 'avatar', text: (state.analyst || '?').slice(0, 2).toUpperCase() }), analyst))),
+    el('main', { class: 'main' },
+      el('header', { class: 'topbar' },
+        el('div', {}, el('div', { class: 'eyebrow', text: `TARVIA SOC / ${state.page === 'ops' ? 'OPERATIONS' : 'AUDIT LEDGER'}` }),
+          el('h1', { text: state.page === 'ops' ? 'Alert operations center' : 'Decision history' })),
+        el('div', { class: 'top-actions' },
+          el('span', { class: 'env', text: `Live data · ${state.config.database || 'database'}` }),
+          el('span', { class: 'notify', title: 'Alerts awaiting the analyst' }, '♧', pending ? el('i', { class: 'badge', text: pending }) : null),
+          el('span', { class: 'mono', text: state.updated ? `Updated ${state.updated.toLocaleTimeString()}` : 'Loading…' }))),
+      state.error ? el('div', { class: 'banner', text: state.error }) : null,
+      content));
+}
+
+// ------------------------------------------------------------------ operations page
+function queueCard(a) {
+  const t = a.ticket;
+  const sev = (t && t.severity) || a.severity;
+  const question = !t ? `Status: ${STATUS_LABEL[a.status]}`
+    : a.status === 'auto_closed' ? `Confirm auto-close as ${t.verdict}?` : `Accept the ${t.verdict} verdict and review ${t.title ? 'the ticket' : 'it'}?`;
+  return el('article', { class: 'ticket', tabindex: 0, onclick: () => openAlert(a.alert_id), onkeydown: (e) => { if (e.key === 'Enter') openAlert(a.alert_id); } },
+    el('div', { class: 'ticket-top' },
+      el('span', { class: 'row-gap' }, el('span', { class: `priority ${sev === 'informational' ? 'low' : sev}`, text: sev }), sevTag(a.base_severity)),
+      el('span', { class: 'mono', text: a.alert_id })),
+    el('h4', { text: (t && t.title) || a.rule_name }),
+    el('div', { class: 'question', text: question }),
+    el('div', { class: 'ticket-meta' },
+      el('span', { text: a.rule_id }), el('span', { text: a.runbook_id }),
+      a.hosts ? el('span', { text: a.hosts }) : null, a.users ? el('span', { text: a.users }) : null,
+      el('span', { text: fmtTime(a.created_at) })),
+    el('div', { class: 'ticket-bottom' },
+      t ? origin(t.origin) : el('span', { class: 'mono', text: STATUS_LABEL[a.status] }),
+      t && t.confidence !== null ? el('span', { class: 'risk', text: `Confidence ${Math.round(t.confidence * 100)}%` }) : null));
+}
+
+function queuePanel() {
+  const q = state.filter.toLowerCase();
+  const wanted = state.status === 'review' ? REVIEW : state.status === 'all' ? null : [state.status];
+  const list = state.alerts
+    .filter((a) => (!wanted || wanted.includes(a.status)) && (!q || `${a.alert_id} ${a.rule_id} ${a.rule_name} ${a.hosts || ''} ${a.users || ''} ${(a.ticket && a.ticket.title) || ''}`.toLowerCase().includes(q)))
+    .sort((x, y) => (SEV_RANK[(x.ticket || x).severity] ?? 5) - (SEV_RANK[(y.ticket || y).severity] ?? 5) || String(y.created_at).localeCompare(x.created_at));
+  const pages = Math.max(1, Math.ceil(list.length / QUEUE_PAGE_SIZE));
+  state.queuePage = Math.min(state.queuePage, pages);
+  const shown = list.slice((state.queuePage - 1) * QUEUE_PAGE_SIZE, state.queuePage * QUEUE_PAGE_SIZE);
+  const select = el('select', { 'aria-label': 'Status filter', onchange: (e) => { state.status = e.target.value; state.queuePage = 1; render(); } },
+    [['review', 'To review'], ['all', 'All'], ...Object.entries(STATUS_LABEL)].map(([v, label]) => el('option', { value: v, selected: state.status === v, text: label })));
+  const search = el('input', { placeholder: 'Search alert, rule, host, user…', value: state.filter,
+    oninput: (e) => { state.filter = e.target.value; state.queuePage = 1; renderSoon(); } });
+  return el('section', { class: 'panel' },
+    el('div', { class: 'panel-head' },
+      el('div', { class: 'panel-title' }, el('div', {}, el('h3', { text: 'Analyst queue' }), el('p', { text: 'Tickets waiting for a human decision' }))),
+      el('span', { class: 'count', text: list.length })),
+    el('div', { class: 'filters compact' }, search, select),
+    el('div', { class: 'panel-body' }, shown.length ? shown.map(queueCard) : el('div', { class: 'empty', text: 'Nothing to review.' })),
+    el('div', { class: 'queue-footer' },
+      el('span', { text: `${list.length} alerts · page ${state.queuePage}/${pages}` }),
+      el('div', { class: 'queue-pagination' },
+        el('button', { disabled: state.queuePage <= 1, onclick: () => { state.queuePage -= 1; render(); }, text: '‹' }),
+        el('button', { class: 'current', text: state.queuePage }),
+        el('button', { disabled: state.queuePage >= pages, onclick: () => { state.queuePage += 1; render(); }, text: '›' }))));
+}
+
+const STAGES = ['Ingested', 'Basic checks', 'LLM', 'Analyst'];
+function stageIndex(status) {
+  return { new: 0, pending_llm: 1, in_llm: 2, llm_error: 2, auto_closed: 3, awaiting_analyst: 3, accepted: 4, rejected: 4 }[status] ?? 0;
+}
+
+function processingPanel() {
+  const working = state.alerts.filter((a) => WORKING.includes(a.status));
+  const done = state.alerts.filter((a) => ['accepted', 'rejected'].includes(a.status)).slice(0, 8);
+  const row = (a) => {
+    const at = stageIndex(a.status);
+    return el('div', { class: 'process-card', onclick: () => openAlert(a.alert_id) },
+      el('div', { class: 'process-row' }, el('b', { text: a.alert_id }), sevTag(a.severity)),
+      el('div', { class: 'mono', text: `${a.rule_id} · ${a.rule_name}` }),
+      el('div', { class: 'stage-line' }, STAGES.map((s, i) => el('span', { class: `stage ${i < at ? 'done' : ''} ${i === at ? 'active' : ''}`, text: s }))),
+      el('span', { class: `pill ${a.status === 'llm_error' ? 'warn' : ''}`, text: STATUS_LABEL[a.status] }));
+  };
+  const closed = (a) => el('div', { class: 'log', onclick: () => openAlert(a.alert_id) },
+    el('span', { class: 'log-time', text: a.status === 'accepted' ? '✓' : '✗' }),
+    el('span', { class: 'log-text' }, el('b', { text: a.alert_id }), ` ${a.human_verdict || a.status} `, a.analyst ? human(a.analyst) : null));
+  return el('section', { class: 'panel' },
+    el('div', { class: 'panel-head' },
+      el('div', { class: 'panel-title' }, el('div', {}, el('h3', { text: 'Processing' }), el('p', { text: 'Ingested → basic checks → LLM → analyst' }))),
+      el('span', { class: 'count', text: working.length })),
+    el('div', { class: 'panel-body' },
+      working.length ? working.map(row) : el('div', { class: 'empty', text: 'No alert in progress. Run python -m src.main to pull new alerts.' }),
+      done.length ? el('div', { class: 'chart-card' }, el('div', { class: 'chart-title', text: 'Recently decided' }), done.map(closed)) : null));
+}
+
+function bars(title, counts, labels) {
+  const entries = Object.entries(counts).filter(([, n]) => n > 0);
+  const max = Math.max(1, ...entries.map(([, n]) => n));
+  return el('div', { class: 'chart-card' }, el('div', { class: 'chart-title', text: title }),
+    el('div', { class: 'bars' }, entries.length ? entries.map(([k, n]) => el('div', { class: 'bar-row' },
+      el('span', { text: (labels && labels[k]) || k }),
+      el('div', { class: 'bar-track' }, el('div', { class: 'bar-fill', style: `width:${Math.round((n / max) * 100)}%` })),
+      el('span', { text: n }))) : el('span', { class: 'mono', text: 'No data yet' })));
+}
+
+function statsPanel() {
+  const s = state.stats;
+  if (!s) return el('section', { class: 'panel' }, el('div', { class: 'empty', text: 'Loading…' }));
+  const agreed = s.decisions.total ? `${Math.round((100 * (s.decisions.agreed || 0)) / s.decisions.total)}%` : '—';
+  const kpi = (label, value, note) => el('div', { class: 'kpi' }, el('span', { class: 'kpi-label', text: label }), el('span', { class: 'kpi-val', text: value }), note ? el('span', { class: 'delta', text: note }) : null);
+  const llm = s.llm || {};
+  return el('section', { class: 'panel' },
+    el('div', { class: 'panel-head' }, el('div', { class: 'panel-title' }, el('div', {}, el('h3', { text: 'Indicators' }), el('p', { text: 'From the triage tables' })))),
+    el('div', { class: 'panel-body' },
+      el('div', { class: 'kpis' },
+        kpi('Alerts stored', s.alerts), kpi('Auto-closed by checks', s.auto_closed, s.alerts ? `${Math.round((100 * s.auto_closed) / s.alerts)}%` : ''),
+        kpi('Awaiting analyst', s.by_status.awaiting_analyst + s.by_status.auto_closed), kpi('Human agrees with AI', agreed, `${s.decisions.total} verdicts`)),
+      bars('Status', s.by_status, STATUS_LABEL),
+      bars('Ticket verdicts (AI)', s.verdicts),
+      el('div', { class: 'chart-card' }, el('div', { class: 'chart-title', text: 'LLM runs' }),
+        el('div', { class: 'detail-grid' },
+          el('div', {}, el('small', { text: 'Runs / valid / errors' }), `${llm.runs || 0} / ${llm.valid || 0} / ${llm.errors || 0}`),
+          el('div', {}, el('small', { text: 'Average time' }), llm.avg_s ? `${Number(llm.avg_s).toFixed(1)} s` : '—'),
+          el('div', {}, el('small', { text: 'Input tokens' }), llm.input_tokens || 0),
+          el('div', {}, el('small', { text: 'Output tokens' }), llm.output_tokens || 0))),
+      bars('Executed actions', s.executed_actions || {})));
+}
+
+function opsPage() {
+  return el('div', { class: 'workspace' },
+    el('div', { class: 'page-intro' },
+      el('div', {}, el('h2', { text: 'Per-alert L1 triage' }), el('p', { text: 'The AI proposes; you accept or reject the verdict and each action. Nothing runs without you.' })),
+      el('button', { class: 'action secondary', onclick: refresh, text: 'Refresh' })),
+    el('div', { class: 'grid' }, queuePanel(), processingPanel(), statsPanel()));
+}
+
+// ------------------------------------------------------------------ history page
+function historyPage() {
+  const rows = state.decisions.map((d) => el('tr', { onclick: () => { state.page = 'ops'; openAlert(d.alert_id); } },
+    el('td', { class: 'mono', text: fmtTime(d.decided_at) }),
+    el('td', { text: d.alert_id }),
+    el('td', { text: d.item === 'verdict' ? 'Verdict' : `${d.action || d.item} → ${d.target || ''}` }),
+    el('td', {}, d.origin ? origin(d.origin) : null, ' ', d.ai_verdict || ''),
+    el('td', {}, human(d.analyst)),
+    el('td', {}, el('span', { class: `pill ${d.decision === 'accepted' ? 'success' : 'warn'}`, text: d.decision }), d.override_verdict ? ` → ${d.override_verdict}` : ''),
+    el('td', { text: d.execution_status || '' }),
+    el('td', { class: 'wrap', text: d.comment || '' })));
+  return el('div', { class: 'history-page' },
+    el('div', { class: 'page-intro' }, el('div', {}, el('h2', { text: 'Decision history' }), el('p', { text: 'What the AI proposed and what the analyst decided, newest first.' }))),
+    el('div', { class: 'table-wrap' }, el('table', { class: 'table' },
+      el('thead', {}, el('tr', {}, ['Decided', 'Alert', 'Item', 'AI proposal', 'Analyst', 'Decision', 'Execution', 'Comment'].map((h) => el('th', { text: h })))),
+      el('tbody', {}, rows.length ? rows : el('tr', {}, el('td', { colspan: 8, class: 'empty', text: 'No decisions yet.' }))))));
+}
+
+// ------------------------------------------------------------------ investigation drawer
+function section(title, ...children) {
+  return el('div', { class: 'investigation-section' }, el('h3', { text: title }), children);
+}
+function grid(pairs) {
+  return el('div', { class: 'detail-grid' }, pairs.filter(([, v]) => v !== null && v !== undefined && v !== '').map(([k, v]) => el('div', {}, el('small', { text: k }), String(v))));
+}
+function list(items, render) {
+  return items && items.length ? el('ul', { class: 'plain' }, items.map((x) => el('li', {}, render(x)))) : el('p', { class: 'mono', text: 'None' });
+}
+
+function alertTab(d) {
+  const a = d.alert, e = d.entities;
+  return [
+    section('Alert', grid([['Rule', `${a.rule_id} · ${a.rule_name}`], ['Severity (alert / rule)', `${a.severity} / ${a.base_severity}`],
+      ['Created', fmtTime(a.created_at)], ['Runbook', a.runbook_id], ['MITRE', `${a.technique_id || ''} ${a.technique_name || ''} (${a.tactic || ''})`], ['Source', a.source_product]]),
+      el('p', { class: 'untrusted-label', text: 'Description and evidence come from the detection (untrusted data):' }),
+      el('div', { class: 'explanation', text: a.description || '' }), pretty(a.evidence)),
+    section('Entities',
+      list(e.hosts, (h) => `${h.hostname} (${h.ip || 'no IP'}, ${h.criticality}, ${h.zone_id}, ${h.business_service})`),
+      list(e.users, (u) => `${u.username} · ${u.department || ''} · ${u.account_type}${u.privileged ? ' · privileged' : ''}${u.vip ? ' · VIP' : ''}`),
+      list(e.indicators, (i) => `${i.indicator_type}: ${i.value} — TIP ${i.reputation || 'unknown'}`),
+      e.files.length ? list(e.files, (f) => `${f.file_name || ''} ${f.sha256 || ''}`) : null,
+      e.processes.length ? list(e.processes, (p) => `${p.parent_name || '?'} → ${p.name}: ${p.command_line || ''}`) : null,
+      e.customers.length ? list(e.customers, (c) => `${c.customer_id} (${c.role || ''})`) : null),
+    section(`Logs cited (${d.events.length})`, d.events.map((ev) => el('details', { class: 'event' },
+      el('summary', { text: `${ev.event_id} · ${ev.source || 'missing'} · ${ev.event ? fmtTime(ev.event.timestamp) : ''}` }), ev.event ? pretty(ev.event) : null))),
+  ];
+}
+
+function checksTab(d) {
+  const c = d.checks;
+  if (!c) return [section('Basic checks', el('p', { text: 'Not run yet.' }))];
+  return [
+    section('Outcome', el('div', { class: 'recommendation-main' },
+      el('div', {}, el('small', { text: 'Deterministic checks (no LLM)' }), el('strong', { text: c.discard ? `Auto-closed as ${c.verdict} (${c.severity})` : 'Kept for the LLM' })),
+      origin('auto_check'))),
+    section('Guards (never auto-close)', list(c.guards, (g) => el('span', { class: 'policy', text: g }))),
+    section('Explanations found', list(c.reasons, (r) => r)),
+    section('Authoritative references', list(c.references, (r) => r)),
+  ];
+}
+
+function llmTab(d) {
+  const run = d.llm;
+  if (!run) return [section('LLM', el('p', { text: d.checks && d.checks.discard ? 'Not needed: closed by the basic checks.' : 'No LLM run yet (python -m src.main --llm …).' }))];
+  const entry = (e) => {
+    if (e.type === 'contexto') {
+      return el('div', { class: 'timeline-item' }, el('strong', { text: `Context request ${e.n}${e.comprobacion ? ' · ' + e.comprobacion : ''}${e.is_error ? ' (rejected)' : ''}` }),
+        el('p', { text: e.motivo || '' }), list(e.consultas || [], (q) => `${q.consulta}(${(q.parametros || []).join(', ')}) → ${q.error ? 'error: ' + q.error : q.filas + ' rows'}`));
+    }
+    if (e.type === 'ticket') return el('div', { class: 'timeline-item' }, el('strong', { text: `Ticket attempt ${e.attempt}` }), el('p', { text: e.errors && e.errors.length ? 'Invalid: ' + e.errors.join('; ') : 'Valid' }));
+    return el('div', { class: 'timeline-item' }, el('strong', { text: e.type }), el('p', { text: e.output || JSON.stringify(e.ticket || '') }));
+  };
+  return [
+    section('Run', grid([['Model', run.model], ['Status', run.status], ['Valid ticket', run.valid ? 'yes' : 'no'], ['Time', run.elapsed_s ? `${run.elapsed_s} s` : '—'],
+      ['Tokens in / out', `${run.usage.input_tokens || 0} / ${run.usage.output_tokens || 0}`], ['Started', fmtTime(run.started_at)]]),
+      run.errors && run.errors.length ? el('div', { class: 'signal' }, el('span', { text: 'Errors' }), run.errors.map((x) => el('small', { text: x }))) : null),
+    section('Transcript', el('div', { class: 'timeline' }, run.transcript.map(entry))),
+    section(`Rows returned (${d.context_requests.length} requests)`, d.context_requests.map((r) => el('details', { class: 'event' },
+      el('summary', { text: `#${r.n} ${r.motivo || ''}` }), pretty(r.rows)))),
+  ];
+}
+
+function decisionFor(d, item) {
+  const run = d.ticket && d.ticket.run_id;
+  return [...d.decisions].reverse().find((x) => x.item === item && x.run_id === run);
+}
+
+function ticketTab(d) {
+  if (!d.ticket) return [section('Ticket', el('p', { text: 'No ticket yet.' }))];
+  const t = d.ticket.ticket;
+  const actions = (t.recommended_actions || []).map((a, i) => {
+    const decided = decisionFor(d, `action:${i}`);
+    const exec = [...d.executed_actions].reverse().find((x) => x.run_id === d.ticket.run_id && x.action_index === i);
+    return el('div', { class: 'action-card' },
+      el('div', { class: 'process-row' }, el('b', { text: `${a.action} → ${a.target}` }), a.requires_approval ? el('span', { class: 'policy', text: 'Requires approval' }) : null),
+      a.justification ? el('p', { text: a.justification }) : null,
+      decided ? el('p', {}, human(decided.analyst), ` ${decided.decision}`, decided.comment ? ` — ${decided.comment}` : '') : null,
+      exec ? el('p', { class: `exec ${exec.status}`, text: `Execution: ${exec.action} ${exec.status}${exec.api_result && exec.api_result.detail ? ' — ' + exec.api_result.detail : ''}` }) : null,
+      el('div', { class: 'decision-actions' },
+        el('button', { class: 'action outline', onclick: () => sendDecision({ item: `action:${i}`, decision: 'accepted', run_id: d.ticket.run_id, comment: commentValue() }), text: a.requires_approval ? 'Approve & execute' : 'Accept' }),
+        el('button', { class: 'action danger', onclick: () => sendDecision({ item: `action:${i}`, decision: 'rejected', run_id: d.ticket.run_id, comment: commentValue() }), text: 'Reject' })));
+  });
+  return [
+    section('Ticket', el('div', { class: 'recommendation-main' },
+      el('div', {}, el('small', { text: t.ticket_id }), el('strong', { text: t.title })), origin(d.ticket.origin)),
+      grid([['Verdict', t.verdict], ['Severity', t.severity], ['Confidence', t.confidence !== undefined ? `${Math.round(t.confidence * 100)}%` : ''],
+        ['Escalate', t.escalation && t.escalation.escalate ? `yes → ${t.escalation.to || ''}` : 'no'], ['Valid', d.ticket.valid ? 'yes' : 'no']]),
+      el('p', { class: 'lead', text: t.summary }), t.severity_rationale ? el('p', { text: t.severity_rationale }) : null),
+    section('Evidence', list(t.evidence, (x) => `${x.event_id || ''} (${x.source || ''}): ${x.finding || ''}`)),
+    t.open_questions && t.open_questions.length ? section('Open questions', list(t.open_questions, (x) => x)) : null,
+    section('Recommended actions', actions.length ? actions : el('p', { class: 'mono', text: 'None proposed' })),
+    section('Full ticket JSON', el('details', {}, el('summary', { text: 'Show' }), pretty(t))),
+  ];
+}
+
+function decisionsTab(d) {
+  return [
+    section('Human verdict (alert_history)', el('p', { class: 'lead', text: d.alert_history || 'Not set — written only when an analyst accepts a verdict.' })),
+    section('Decisions', el('div', { class: 'timeline' }, d.decisions.length ? [...d.decisions].reverse().map((x) => el('div', { class: 'timeline-item' },
+      el('strong', {}, human(x.analyst), ` ${x.decision} ${x.item}${x.override_verdict ? ' → ' + x.override_verdict : ''}`),
+      el('p', { text: `${fmtTime(x.decided_at)} · run ${x.run_id}${x.comment ? ' · ' + x.comment : ''}` }))) : el('p', { text: 'None yet.' }))),
+    section('Executed actions', list(d.executed_actions, (x) => `${fmtTime(x.executed_at)} ${x.action} ${x.target}: ${x.status}${x.approval_token ? ' (approval ' + x.approval_token + ')' : ''}${x.api_result && x.api_result.detail ? ' — ' + x.api_result.detail : ''}`)),
+    section('Runs', list(d.runs, (r) => `#${r.run_id} ${r.stage} · ${r.model || ''} · ${r.status}${r.valid === false ? ' · invalid' : ''} · ${fmtTime(r.started_at)}`)),
+  ];
+}
+
+function commentValue() {
+  const box = document.querySelector('#decision-comment');
+  return box ? box.value.trim() : '';
+}
+
+function footer(d) {
+  if (!d.ticket) return null;
+  const t = d.ticket.ticket;
+  const decided = decisionFor(d, 'verdict');
+  const override = el('select', { id: 'override', 'aria-label': 'Final verdict' },
+    el('option', { value: '', text: t.verdict === 'needs_more_info' ? 'Choose the final verdict…' : `Keep AI verdict (${t.verdict})` }),
+    VERDICTS.filter((v) => v !== t.verdict).map((v) => el('option', { value: v, text: `Override → ${v}` })));
+  const verdict = (decision) => () => sendDecision({ item: 'verdict', decision, run_id: d.ticket.run_id, comment: commentValue(),
+    override_verdict: decision === 'accepted' && override.value ? override.value : null });
+  return el('div', { class: 'investigation-footer' },
+    decided ? el('p', { class: 'mono' }, 'Last verdict decision: ', human(decided.analyst), ` ${decided.decision}${decided.override_verdict ? ' → ' + decided.override_verdict : ''}`) : null,
+    el('textarea', { id: 'decision-comment', placeholder: 'Comment for the record (optional)' }),
+    el('div', { class: 'decision-actions' }, override,
+      el('button', { class: 'action danger', onclick: verdict('rejected'), text: 'Reject verdict' }),
+      el('button', { class: 'action primary', onclick: verdict('accepted'), text: 'Accept verdict' })));
+}
+
+function drawer() {
+  const d = state.detail;
+  const close = () => { state.open = null; state.detail = null; render(); };
+  const tabs = [['alert', 'Alert'], ['checks', 'Basic checks'], ['llm', 'LLM transcript'], ['ticket', 'Ticket'], ['decisions', 'Decisions']];
+  const body = !d ? [el('div', { class: 'empty', text: 'Loading…' })]
+    : { alert: alertTab, checks: checksTab, llm: llmTab, ticket: ticketTab, decisions: decisionsTab }[state.tab](d);
+  return el('div', { class: 'investigation-backdrop', onclick: (e) => { if (e.target === e.currentTarget) close(); } },
+    el('aside', { class: 'investigation', role: 'dialog', 'aria-label': 'Alert investigation' },
+      el('div', { class: 'investigation-head' },
+        el('div', {}, el('span', { class: 'mono', text: state.open }),
+          el('h2', { text: d ? ((d.ticket && d.ticket.ticket.title) || d.alert.rule_name) : '…' }),
+          d ? el('div', { class: 'investigation-tags' }, sevTag(d.alert.severity), el('span', { class: 'pill', text: STATUS_LABEL[d.status] || d.status })) : null),
+        el('button', { class: 'close', onclick: close, 'aria-label': 'Close', text: '×' })),
+      el('div', { class: 'tabs' }, tabs.map(([id, label]) => el('button', { class: state.tab === id ? 'active' : '', onclick: () => { state.tab = id; render(); }, text: label }))),
+      el('div', { class: 'investigation-body' }, body),
+      d ? footer(d) : null));
+}
+
+// ------------------------------------------------------------------ render
+let renderTimer = null;
+function renderSoon() {
+  clearTimeout(renderTimer);
+  renderTimer = setTimeout(render, 150);
+}
+
+function render() {
+  const focused = document.activeElement;
+  const keep = focused && focused.tagName === 'INPUT' && focused.placeholder ? { placeholder: focused.placeholder, pos: focused.selectionStart } : null;
+  const comment = commentValue();
+  const scroll = document.querySelector('.investigation-body');
+  const scrollTop = scroll ? scroll.scrollTop : 0;
+  root.replaceChildren(shell(state.page === 'ops' ? opsPage() : historyPage()), state.open ? drawer() : '', state.toast ? el('div', { class: 'toast', role: 'status', text: state.toast }) : '');
+  const box = document.querySelector('#decision-comment');
+  if (box && comment) box.value = comment;
+  const body = document.querySelector('.investigation-body');
+  if (body) body.scrollTop = scrollTop;
+  if (keep) {
+    const input = [...document.querySelectorAll('input')].find((i) => i.placeholder === keep.placeholder);
+    if (input) { input.focus(); input.setSelectionRange(keep.pos, keep.pos); }
+  }
+}
+
+async function start() {
+  try {
+    state.config = await api('/api/config');
+    if (!state.analyst && state.config.analyst) state.analyst = state.config.analyst;
+  } catch (err) {
+    state.error = err.message;
+  }
+  await refresh();
+  setInterval(() => { if (!document.querySelector('textarea:focus, select:focus')) refresh(); }, REFRESH_MS);
+}
+
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && state.open) { state.open = null; state.detail = null; render(); } });
+start();

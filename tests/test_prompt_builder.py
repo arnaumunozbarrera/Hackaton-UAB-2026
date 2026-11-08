@@ -1,5 +1,6 @@
 """Tests for src.prompt_builder: unit tests with a fake context plus an end-to-end test on docs/ (skipped if absent)."""
 
+import re
 import sqlite3
 from pathlib import Path
 
@@ -52,8 +53,8 @@ def test_schema_map_rejects_unsafe_identifiers():
 def test_every_query_renders_and_binds_one_value_per_placeholder():
     for name, spec in QUERIES.items():
         sql = SchemaMap().render(spec.sql)
-        assert "{" not in sql and "[" not in sql, name
-        assert sql.count("?") == len(spec.params), name
+        assert sql == spec.sql and "{" not in sql, name
+        assert {int(n) for n in re.findall(r"\?(\d+)", sql)} == set(range(1, len(spec.params) + 1)), name
 
 
 def test_parse_runbook():
@@ -112,10 +113,12 @@ def test_prompt_is_compact_and_points_to_read_functions():
 @needs_docs
 def test_schema_map_and_log_limit_are_applied():
     logs = [InformativeLog(f"EDR-{i}", "edr_events", "2026-10-10T09:00:00.000Z", "x") for i in range(3)]
-    cfg = PromptConfig(data_dir=DOCS, max_logs=1, schema_map=SchemaMap(tables={"dim_log": "logs"}))
+    assert SchemaMap(tables={"dim_log": "logs"}).render("SELECT {dim_log.event_id} FROM {dim_log}") == (
+        "SELECT event_id FROM logs"
+    )
+    cfg = PromptConfig(data_dir=DOCS, max_logs=1)
     pk = PromptBuilder(FakeSource(_ctx(informative_logs=logs)), cfg).build("ALR-T-1")
-    sql = " ".join(q.sql for q in pk.queries)
-    assert "FROM logs WHERE" in sql and "FROM dim_log" not in sql
+    assert "FROM alert_events e JOIN" in " ".join(q.sql for q in pk.queries)
     assert "+2 más" in pk.user
 
 

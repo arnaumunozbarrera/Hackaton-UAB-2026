@@ -31,6 +31,7 @@ env/
 data/*.ingestion.json
 # written by the mock SOC API
 docs/06_herramientas/containment_log.jsonl
+data/containment_log.jsonl
 *.log
 tmp/
 out/

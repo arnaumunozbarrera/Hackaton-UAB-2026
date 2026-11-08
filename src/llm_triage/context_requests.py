@@ -72,4 +72,5 @@ def handle_context_request(
             entry["consultas"].append({"consulta": name, "parametros": params, "error": str(exc)})
     content = json.dumps(results, ensure_ascii=False, default=str)[:CONTENT_LIMIT]
     entry["output"] = content[:1500]
+    entry["resultados"] = results
     return content, False, entry

@@ -79,7 +79,7 @@ def execute(
     if len(parametros) != len(spec.params):
         raise ValueError(f"{signature(consulta)} espera {len(spec.params)} parámetros, recibió {len(parametros)}")
     sql = (schema_map or SchemaMap()).render(spec.sql)
-    cur = conn.execute(sql, [str(p) for p in parametros])
+    cur = conn.execute(sql, {str(i): str(p) for i, p in enumerate(parametros, 1)})  # binds ?1, ?2...
     cols = [d[0] for d in cur.description or ()]
     return [dict(zip(cols, row, strict=False)) for row in cur.fetchmany(MAX_ROWS)]
 

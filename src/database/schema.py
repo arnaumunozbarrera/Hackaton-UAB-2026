@@ -40,8 +40,16 @@ BOOLEAN_FIELDS = {
     "device_compliant",
     "authenticated",
     "guardrail_triggered",
+    "valid",
+    "discard",
+    "is_error",
 }
 INTEGER_FIELDS = BOOLEAN_FIELDS | {
+    "run_id",
+    "n",
+    "decision_id",
+    "execution_id",
+    "action_index",
     "service_id",
     "hr_event_id",
     "vulnerability_id",
@@ -68,6 +76,48 @@ INTEGER_FIELDS = BOOLEAN_FIELDS | {
     "tokens_in",
     "tokens_out",
 }
+REAL_FIELDS = {"amount", "elapsed_s", "ticket_confidence"}
+SEVERITIES = ("informational", "low", "medium", "high", "critical")
+FINAL_VERDICTS = ("true_positive", "false_positive", "benign_true_positive")
+# Closed domains of the triage result tables (model outputs and human decisions, never source observations).
+ENUMS = {
+    ("triage_runs", "stage"): ("auto_check", "llm"),
+    ("triage_runs", "status"): ("running", "done", "error"),
+    ("triage_checks", "verdict"): ("benign_true_positive", "false_positive"),
+    ("triage_checks", "severity"): SEVERITIES,
+    ("triage_tickets", "verdict"): (*FINAL_VERDICTS, "needs_more_info"),
+    ("triage_tickets", "severity"): SEVERITIES,
+    ("analyst_decisions", "decision"): ("accepted", "rejected"),
+    ("analyst_decisions", "override_verdict"): FINAL_VERDICTS,
+    ("executed_actions", "status"): ("ok", "refused", "error"),
+}
+REQUIRED = {
+    ("users", "username"),
+    ("users", "upn"),
+    ("logs", "timestamp"),
+    ("logs", "source"),
+    ("alerts", "rule_id"),
+    ("alert_history", "verdict"),
+    ("triage_runs", "alert_id"),
+    ("triage_runs", "stage"),
+    ("triage_runs", "status"),
+    ("triage_runs", "started_at"),
+    ("triage_checks", "discard"),
+    ("triage_tickets", "alert_id"),
+    ("triage_tickets", "ticket_json"),
+    ("triage_tickets", "verdict"),
+    ("triage_tickets", "severity"),
+    ("analyst_decisions", "alert_id"),
+    ("analyst_decisions", "item"),
+    ("analyst_decisions", "decision"),
+    ("analyst_decisions", "analyst"),
+    ("analyst_decisions", "decided_at"),
+    ("executed_actions", "alert_id"),
+    ("executed_actions", "action"),
+    ("executed_actions", "target"),
+    ("executed_actions", "status"),
+    ("executed_actions", "executed_at"),
+}
 ALTERNATIVES = {
     "ad_events_logs": [("subject_user_id", "subject_unresolved"), ("target_user_id", "target_unresolved")],
     "edr_logs": [("user_id", "unresolved_user")],
@@ -89,20 +139,13 @@ def identifier(value: str) -> str:
 def column_type(name: str) -> str:
     if name in INTEGER_FIELDS:
         return "INTEGER"
-    return "REAL" if name == "amount" else "TEXT"
+    return "REAL" if name in REAL_FIELDS else "TEXT"
 
 
 def field_definition(table: str, field: dict, primary: list[str]) -> str:
     name = field["name"]
     quoted = identifier(name)
-    required = name in primary or (table, name) in {
-        ("users", "username"),
-        ("users", "upn"),
-        ("logs", "timestamp"),
-        ("logs", "source"),
-        ("alerts", "rule_id"),
-        ("alert_history", "verdict"),
-    }
+    required = name in primary or (table, name) in REQUIRED
     result = f"  {quoted} {column_type(name)}" + (" NOT NULL" if required else "")
     if table == "users" and name in {"username", "upn"}:
         result += " COLLATE NOCASE"
@@ -114,6 +157,11 @@ def field_definition(table: str, field: dict, primary: list[str]) -> str:
         result += f" CHECK ({quoted} IS NULL OR json_valid({quoted}))"
     if name in {"confidence", "score"}:
         result += f" CHECK ({quoted} BETWEEN 0 AND 100)"
+    if name == "ticket_confidence":
+        result += f" CHECK ({quoted} BETWEEN 0 AND 1)"
+    if (table, name) in ENUMS:
+        values = ", ".join("'" + value + "'" for value in ENUMS[(table, name)])
+        result += f" CHECK ({quoted} IN ({values}))"
     return result
 
 
@@ -134,6 +182,8 @@ def table_definition(table: dict, relations: list[dict]) -> str:
         parts.append("  CHECK (verdict IN ('true_positive', 'false_positive', 'benign_true_positive'))")
     if name == "change_assets":
         parts.append("  CHECK (role IN ('target', 'source', 'access_path'))")
+    if name == "analyst_decisions":
+        parts.append("  CHECK (item = 'verdict' OR (item GLOB 'action:[0-9]*' AND run_id IS NOT NULL))")
     if name == "logs":
         sources = ", ".join("'" + source + "'" for source in DETAIL_SOURCES.values())
         parts.append(f"  CHECK (source IN ({sources}))")

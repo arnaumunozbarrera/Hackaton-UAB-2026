@@ -7,6 +7,7 @@ the database queries that answer it, so the LLM follows what a human N1 does tod
 from __future__ import annotations
 
 import re
+import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -46,6 +47,24 @@ def load_runbooks(directory: str | Path) -> dict[str, Runbook]:
     """All runbooks in a directory, keyed by id (RB-01...)."""
     books = [parse_runbook(p.read_text(encoding="utf-8")) for p in sorted(Path(directory).glob("RB-*.md"))]
     return {b.id: b for b in books}
+
+
+def runbooks_from_db(conn: sqlite3.Connection) -> dict[str, Runbook]:
+    """Runbooks stored in the database (table `runbooks`, rules from `detection_rules`), keyed by id."""
+    rules: dict[str, list[str]] = {}
+    for rule_id, runbook_id in conn.execute("SELECT rule_id, runbook_id FROM detection_rules ORDER BY rule_id"):
+        rules.setdefault(runbook_id, []).append(rule_id)
+    books = {}
+    sql = "SELECT runbook_id, title, checks_text, decision_guidance_text FROM runbooks ORDER BY runbook_id"
+    for rid, title, checks, decisions in conn.execute(sql):
+        books[rid] = Runbook(
+            rid,
+            title or "",
+            ", ".join(rules.get(rid, [])),
+            tuple(m[1].strip() for m in re.finditer(r"^\d+\.\s+(.+)$", checks or "", re.M)),
+            tuple(m[1].strip() for m in re.finditer(r"^-\s+(.+)$", decisions or "", re.M)),
+        )
+    return books
 
 
 PROFILES: dict[str, RunbookProfile] = {

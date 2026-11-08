@@ -28,7 +28,13 @@ def destinations(output: Path, report: Path, data: Path, *, replace: bool) -> No
         raise FileExistsError(f"Database already exists: {output}. Use --replace only to intentionally rebuild it.")
 
 
-def ingest(connection: sqlite3.Connection, sources: Sources, progress: Callable[[str], None]) -> tuple[Writer, list]:
+def ingest(
+    connection: sqlite3.Connection,
+    sources: Sources,
+    progress: Callable[[str], None],
+    *,
+    context_only: bool = False,
+) -> tuple[Writer, list]:
     writer = Writer(connection)
     issues = []
     progress("Loading context and approved relations...")
@@ -39,6 +45,9 @@ def ingest(connection: sqlite3.Connection, sources: Sources, progress: Callable[
     load_intelligence(writer, sources, issues)
     writer.flush_all()
     connection.commit()
+    if context_only:
+        progress("Context only: logs and alerts will arrive through the SOC API (python -m src.main)")
+        return writer, issues
     progress("Loading 18 log sources...")
     load_logs(writer, sources, directory, progress)
     progress("Loading alerts and their entity/event relations...")
@@ -55,8 +64,10 @@ def build_database(
     report: Path | None = None,
     *,
     replace: bool = False,
+    context_only: bool = False,
     progress: Callable[[str], None] = print,
 ) -> dict:
+    """Build the database; `context_only` leaves alerts and logs empty for the API-driven workflow."""
     output, data, relations = output.resolve(), data.resolve(), relations.resolve()
     report = report.resolve() if report else output.with_suffix(".ingestion.json")
     destinations(output, report, data, replace=replace)
@@ -74,12 +85,13 @@ def build_database(
         connection.execute("PRAGMA temp_store=MEMORY")
         connection.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
         sources = Sources(data, relations)
-        writer, issues = ingest(connection, sources, progress)
+        writer, issues = ingest(connection, sources, progress, context_only=context_only)
         progress("Creating indexes and verifying every documented distinct-value count...")
         create_indexes(connection, writer)
-        checks = validate(connection, sources, writer)
+        checks = validate(connection, sources, writer, context_only=context_only)
         result = {
             "database": str(output),
+            "mode": "context_only" if context_only else "full",
             "completed_at_utc": datetime.now(timezone.utc).isoformat(),
             "validation": checks,
             "source_files": sources.manifest,
@@ -106,8 +118,15 @@ def main() -> None:
     parser.add_argument(
         "--replace", action="store_true", help="Intentionally replace an existing database after validation"
     )
+    parser.add_argument(
+        "--context-only",
+        action="store_true",
+        help="Load inventory, intelligence, rules and runbooks only; alerts and logs come from the SOC API",
+    )
     args = parser.parse_args()
-    build_database(args.out, args.data, args.relations, args.report, replace=args.replace)
+    build_database(
+        args.out, args.data, args.relations, args.report, replace=args.replace, context_only=args.context_only
+    )
 
 
 if __name__ == "__main__":

@@ -16,7 +16,7 @@ def _value(value: Any) -> str:
     """Render a scalar or a small structured value deterministically."""
     if value is None:
         return ""
-    if isinstance(value, (dict, list)):
+    if isinstance(value, dict | list):
         return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return str(value)
 

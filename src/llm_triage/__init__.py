@@ -10,11 +10,13 @@ answers the same read functions the database will.
 from .backend import DatasetToolBackend
 from .claude_code import ClaudeCodeRunner
 from .client import AnthropicLLM, MockLLM, TriageResult, TriageRunner, load_env
+from .db_backend import DatabaseToolBackend
 from .validator import validate_ticket
 
 __all__ = [
     "AnthropicLLM",
     "ClaudeCodeRunner",
+    "DatabaseToolBackend",
     "DatasetToolBackend",
     "MockLLM",
     "TriageResult",

@@ -29,7 +29,9 @@ def _parser() -> argparse.ArgumentParser:
         command = sub.add_parser(name, help=help_text)
         command.add_argument(
             "--input",
-            default="tmp/alert_embeddings.npz" if name == "plot" else "docs/03_alertas/alertas_muestra_desarrollo.jsonl",
+            default="tmp/alert_embeddings.npz"
+            if name == "plot"
+            else "docs/03_alertas/alertas_muestra_desarrollo.jsonl",
         )
         command.add_argument("--limit", type=int, default=0, help="0 means all alerts")
         if name == "context":
@@ -77,16 +79,35 @@ def main(argv: list[str] | None = None) -> int:
         alerts = load_dataset_alerts(Path(args.data))
         if args.alert_id not in alerts:
             raise SystemExit(f"alerta no encontrada: {args.alert_id}")
-        candidates = collect_dataset_candidates(args.data, alerts[args.alert_id], max_candidates=max(args.budget * 5, 100))
+        candidates = collect_dataset_candidates(
+            args.data, alerts[args.alert_id], max_candidates=max(args.budget * 5, 100)
+        )
         selected = select_log_context(alerts[args.alert_id], candidates, args.budget, args.per_source)
-        print(json.dumps({
-            "alert_id": args.alert_id,
-            "budget": args.budget,
-            "selected": len(selected),
-            "by_source": {source: sum(item.source == source for item in selected) for source in sorted({item.source for item in selected})},
-            "logs": [{"event_id": item.event_id, "source": item.source, "score": round(item.score, 3), "reason": item.reason} for item in selected],
-            "context_text": log_context_text(selected),
-        }, ensure_ascii=False, indent=2))
+        print(
+            json.dumps(
+                {
+                    "alert_id": args.alert_id,
+                    "budget": args.budget,
+                    "selected": len(selected),
+                    "by_source": {
+                        source: sum(item.source == source for item in selected)
+                        for source in sorted({item.source for item in selected})
+                    },
+                    "logs": [
+                        {
+                            "event_id": item.event_id,
+                            "source": item.source,
+                            "score": round(item.score, 3),
+                            "reason": item.reason,
+                        }
+                        for item in selected
+                    ],
+                    "context_text": log_context_text(selected),
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
         return 0
 
     from sentence_transformers import SentenceTransformer
@@ -97,15 +118,12 @@ def main(argv: list[str] | None = None) -> int:
     context_vectors = None
     context_counts: list[int] = []
     if args.with_context:
-        from .log_context import SelectedLog
-
         alert_map = {alert["alert_id"]: alert for alert in alerts}
         candidates = collect_dataset_candidates_for_alerts(
             args.data, alert_map, max_candidates=max(args.budget * 5, 100)
         )
         contexts = [
-            select_log_context(alert, candidates[alert["alert_id"]], args.budget, args.per_source)
-            for alert in alerts
+            select_log_context(alert, candidates[alert["alert_id"]], args.budget, args.per_source) for alert in alerts
         ]
         context_texts = [log_context_text(rows) for rows in contexts]
         context_counts = [len(rows) for rows in contexts]
@@ -127,8 +145,11 @@ def main(argv: list[str] | None = None) -> int:
     output.parent.mkdir(parents=True, exist_ok=True)
     import numpy as np
 
-    arrays = {"alert_ids": np.array([a["alert_id"] for a in alerts]), "embeddings": alert_vectors,
-              "alert_embeddings": alert_vectors}
+    arrays = {
+        "alert_ids": np.array([a["alert_id"] for a in alerts]),
+        "embeddings": alert_vectors,
+        "alert_embeddings": alert_vectors,
+    }
     if context_vectors is not None:
         arrays["context_embeddings"] = context_vectors
         arrays["context_counts"] = np.array(context_counts, dtype=np.int32)

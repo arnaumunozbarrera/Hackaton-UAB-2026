@@ -830,3 +830,98 @@ Atributos aprobados: `alert_id` es clave primaria y referencia a `alerts.alert_i
 
 `verdict` es obligatorio y solo admite `true_positive`, `false_positive` o `benign_true_positive`. Esta tabla se alimentará con resultados del triaje, no con clasificaciones preexistentes en los CSV/JSONL. Los tres valores son el dominio permitido, no un recuento de resultados ya generados.
 
+# triage_runs
+
+| Atributos | Origen | Cantidad de valores únicos |
+|---|---|---:|
+| `run_id` | Identificador secuencial de la ejecución (SQLite `INTEGER PRIMARY KEY`) | Resultado del triaje |
+| `alert_id` | Alerta triada → `alerts.alert_id` | Resultado del triaje |
+| `stage` | Etapa: `auto_check` (comprobaciones deterministas) o `llm` | Resultado del triaje |
+| `model` | Modelo o motor que produjo el resultado (`basic-checks`, nombre del LLM, `mock`) | Resultado del triaje |
+| `status` | Estado: `running`, `done` o `error` | Resultado del triaje |
+| `started_at` | Inicio de la ejecución, UTC ISO 8601 | Resultado del triaje |
+| `finished_at` | Fin de la ejecución, UTC ISO 8601 | Resultado del triaje |
+| `valid` | 1 si el ticket producido supera el esquema y la política | Resultado del triaje |
+| `errors_json` | Lista de errores de validación o de ejecución | Resultado del triaje |
+| `usage_json` | Consumo de tokens y turnos devuelto por el LLM | Resultado del triaje |
+| `elapsed_s` | Duración en segundos | Resultado del triaje |
+| `transcript_json` | Transcripción completa de la ejecución (texto, peticiones de contexto, tickets) | Resultado del triaje |
+
+Una fila por ejecución de triaje. Cada alerta tiene una ejecución `auto_check` y, si no se descarta, una `llm`. Es salida del sistema, no observación de origen: nunca se rellena en la ingesta.
+
+# triage_checks
+
+| Atributos | Origen | Cantidad de valores únicos |
+|---|---|---:|
+| `run_id` | Ejecución `auto_check` → `triage_runs.run_id` | Resultado del triaje |
+| `discard` | 1 si las comprobaciones deterministas permiten cerrar la alerta sin LLM | Resultado del triaje |
+| `verdict` | Veredicto propuesto al descartar: `benign_true_positive` o `false_positive` | Resultado del triaje |
+| `severity` | Severidad propuesta al descartar (`informational` o `low`) | Resultado del triaje |
+| `reasons_json` | Lista de razones legibles (regla aplicada, guardas activadas) | Resultado del triaje |
+| `references_json` | Referencias que justifican el descarte (p. ej. `CHG-2026-1042`) | Resultado del triaje |
+| `guards_json` | Guardas de seguridad que impiden el cierre automático | Resultado del triaje |
+
+Resultado de las comprobaciones básicas de una alerta. Las guardas (regla high/critical, OT, IOC del TIP, otra alerta high/critical sin explicar en ±24 h) impiden el descarte.
+
+# triage_tickets
+
+| Atributos | Origen | Cantidad de valores únicos |
+|---|---|---:|
+| `run_id` | Ejecución que produjo el ticket → `triage_runs.run_id` | Resultado del triaje |
+| `alert_id` | Alerta → `alerts.alert_id` | Resultado del triaje |
+| `ticket_id` | `ticket_id` del ticket (lo elige el modelo; no es único entre alertas) | Resultado del triaje |
+| `ticket_json` | Ticket completo según `docs/01_contexto/ticket_salida.schema.json` | Resultado del triaje |
+| `verdict` | `verdict` del ticket | Resultado del triaje |
+| `severity` | `severity` del ticket | Resultado del triaje |
+| `ticket_confidence` | `confidence` del ticket, entre 0 y 1 | Resultado del triaje |
+| `valid` | 1 si el ticket supera el esquema y la política | Resultado del triaje |
+| `created_at` | Momento de registro, UTC ISO 8601 | Resultado del triaje |
+
+Un ticket por ejecución (automático o del LLM). La clave es la ejecución porque el `ticket_id` lo genera el modelo y puede repetirse entre alertas.
+
+# triage_context_requests
+
+| Atributos | Origen | Cantidad de valores únicos |
+|---|---|---:|
+| `run_id` | Ejecución `llm` → `triage_runs.run_id` | Resultado del triaje |
+| `n` | Número de orden de la petición dentro de la ejecución (1..6) | Resultado del triaje |
+| `motivo` | Motivo declarado por el LLM (dato no confiable) | Resultado del triaje |
+| `comprobacion` | Comprobación del runbook a la que responde (opcional) | Resultado del triaje |
+| `consultas_json` | Consultas del catálogo pedidas, con sus parámetros | Resultado del triaje |
+| `rows_json` | Filas devueltas por cada consulta (máximo 50 por consulta) | Resultado del triaje |
+| `is_error` | 1 si la petición se rechazó (sin motivo, demasiadas consultas o límite alcanzado) | Resultado del triaje |
+
+Respuestas de tipo 2 (`solicitar_contexto`) del LLM, para mostrar qué pidió, por qué y qué leyó.
+
+# analyst_decisions
+
+| Atributos | Origen | Cantidad de valores únicos |
+|---|---|---:|
+| `decision_id` | Identificador secuencial de la decisión | Resultado del triaje |
+| `alert_id` | Alerta → `alerts.alert_id` | Resultado del triaje |
+| `run_id` | Ticket decidido → `triage_tickets.run_id` | Resultado del triaje |
+| `item` | Elemento decidido: `verdict` o `action:<n>` (índice en `recommended_actions`) | Resultado del triaje |
+| `decision` | `accepted` o `rejected` | Resultado del triaje |
+| `override_verdict` | Veredicto del analista cuando corrige o completa el del ticket | Resultado del triaje |
+| `analyst` | Analista que decide | Resultado del triaje |
+| `comment` | Comentario del analista | Resultado del triaje |
+| `decided_at` | Momento de la decisión, UTC ISO 8601 | Resultado del triaje |
+
+Decisiones humanas sobre el veredicto y cada acción recomendada. Solo aceptar el veredicto escribe `alert_history`.
+
+# executed_actions
+
+| Atributos | Origen | Cantidad de valores únicos |
+|---|---|---:|
+| `execution_id` | Identificador secuencial de la ejecución de la acción | Resultado del triaje |
+| `alert_id` | Alerta → `alerts.alert_id` | Resultado del triaje |
+| `run_id` | Ticket cuya acción se ejecuta → `triage_tickets.run_id` | Resultado del triaje |
+| `action_index` | Índice de la acción en `recommended_actions` | Resultado del triaje |
+| `action` | Acción de la API simulada (`isolate_host`, `block_ioc`...) o `escalate_ot` | Resultado del triaje |
+| `target` | Objetivo de la acción | Resultado del triaje |
+| `approval_token` | Token de `POST /approvals` cuando la política exige aprobación | Resultado del triaje |
+| `status` | `ok`, `refused` o `error` | Resultado del triaje |
+| `api_result_json` | Respuesta de la API de contención o motivo del rechazo | Resultado del triaje |
+| `executed_at` | Momento de ejecución, UTC ISO 8601 | Resultado del triaje |
+
+Contención ejecutada tras la aceptación del analista, a través de la API simulada. Nunca se actúa sobre OT: se registra `refused` y se escala.
