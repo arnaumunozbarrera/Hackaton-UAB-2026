@@ -6,3 +6,4 @@ requests>=2.31
 anthropic>=0.40          # LLM stage (src/llm_triage)
 jsonschema>=4.18         # ticket validation (Draft 2020-12)
 claude-agent-sdk>=0.2      # LLM stage via local Claude Code CLI with plan login (--claude-code)
+sentence-transformers>=3.0 # Local multilingual text embeddings (BAAI/bge-m3)
