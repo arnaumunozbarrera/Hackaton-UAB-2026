@@ -3,16 +3,16 @@
 Why: with a Pro/Max subscription, Claude Code and the Agent SDK signed in with your plan draw from the plan's
 usage limits instead of API credits (personal, local use). The SDK spawns the Claude Code CLI; our two tools run
 in-process as an SDK MCP server:
-- `consultar_bd`: answered by the same backend as the API runner (dataset today, database later);
+- `solicitar_contexto` (response type 2): read-only context requests with a reason, answered by the same backend as
+  the API runner (dataset today, database later);
 - `emitir_ticket`: validates the ticket (schema + policy) and returns the errors to the model for correction.
 Built-in Claude Code tools are removed (`tools=[]`) and on-disk settings are ignored (`setting_sources=[]`), so the
-agent can only read through `consultar_bd`.
+agent can only read through `solicitar_contexto`.
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import time
 from dataclasses import dataclass, field
@@ -20,14 +20,16 @@ from typing import Any
 
 from ..prompt_builder import PromptBuilder, PromptPackage
 from ..prompt_builder.tools import TOOL_NAME
-from .client import RESULT_PREVIEW, TICKET_TOOL, Backend, TriageResult
+from .client import TICKET_TOOL, Backend, TriageResult
+from .context_requests import ContextBudget, handle_context_request
 from .validator import tool_schema, validate_ticket
 
 SERVER = "soc"
 QUALIFIED = {name: f"mcp__{SERVER}__{name}" for name in (TOOL_NAME, TICKET_TOOL)}
 INSTRUCTION = (
-    f"\nHerramientas: {QUALIFIED[TOOL_NAME]} (consultar_bd) para leer datos y {QUALIFIED[TICKET_TOOL]} "
-    "(emitir_ticket) para entregar el ticket completo. Termina en cuanto emitir_ticket confirme que el ticket es válido."
+    f"\nHerramientas: {QUALIFIED[TOOL_NAME]} (solicitar_contexto, respuesta de tipo 2) para pedir más datos con su "
+    f"motivo y {QUALIFIED[TICKET_TOOL]} (emitir_ticket, tipo 1) para entregar el ticket completo. Termina en cuanto "
+    "emitir_ticket confirme que el ticket es válido."
 )
 
 
@@ -48,6 +50,7 @@ class RunState:
     errors: list[str] = field(default_factory=lambda: ["el modelo no entregó ningún ticket"])
     attempts: int = 0
     log: list[dict[str, Any]] = field(default_factory=list)
+    budget: ContextBudget = field(default_factory=ContextBudget)
 
 
 class ToolHandlers:
@@ -56,17 +59,10 @@ class ToolHandlers:
     def __init__(self, backend: Backend, state: RunState) -> None:
         self.backend, self.state = backend, state
 
-    async def consultar(self, args: dict[str, Any]) -> dict[str, Any]:
+    async def solicitar_contexto(self, args: dict[str, Any]) -> dict[str, Any]:
         allowed = [q.name for q in self.state.package.queries]
-        params = args.get("parametros") or []
-        if isinstance(params, str):  # some clients send the array JSON-encoded
-            params = json.loads(params) if params.strip().startswith("[") else [params]
-        try:
-            rows = self.backend.execute(str(args.get("consulta", "")), [str(p) for p in params], allowed)
-            content, error = json.dumps(rows, ensure_ascii=False, default=str)[:RESULT_PREVIEW], False
-        except (ValueError, TypeError) as exc:
-            content, error = f"Error: {exc}", True
-        self.state.log.append({"type": "consulta", "input": args, "output": content[:1500], "is_error": error})
+        content, error, entry = handle_context_request(args, self.backend, allowed, self.state.budget)
+        self.state.log.append(entry)
         return _text(content, error)
 
     async def emitir(self, args: dict[str, Any]) -> dict[str, Any]:
@@ -105,14 +101,16 @@ class ClaudeCodeRunner:
     def _options(self, package: PromptPackage, handlers: ToolHandlers) -> Any:
         from claude_agent_sdk import ClaudeAgentOptions, create_sdk_mcp_server, tool
 
-        consultar = tool(TOOL_NAME, package.tool["description"], package.tool["input_schema"])(handlers.consultar)
+        contexto = tool(TOOL_NAME, package.tool["description"], package.tool["input_schema"])(
+            handlers.solicitar_contexto
+        )
         emitir = tool(TICKET_TOOL, "Entrega el ticket de triaje final.", tool_schema(package.response_schema))(
             handlers.emitir
         )
         return ClaudeAgentOptions(
             system_prompt=package.system + INSTRUCTION,
             tools=[],  # no built-in Claude Code tools (no Bash, Read, Web...)
-            mcp_servers={SERVER: create_sdk_mcp_server(name=SERVER, tools=[consultar, emitir])},
+            mcp_servers={SERVER: create_sdk_mcp_server(name=SERVER, tools=[contexto, emitir])},
             allowed_tools=list(QUALIFIED.values()),
             setting_sources=[],  # ignore CLAUDE.md and user/project settings
             max_turns=self.max_turns,
@@ -140,7 +138,8 @@ class ClaudeCodeRunner:
         """Triage one alert through Claude Code. `llm` is ignored (kept for interface compatibility)."""
         started, package = time.monotonic(), self.builder.build(alert_id)
         self.ensure_subscription_auth()
-        state = RunState(package, self.max_repairs, log=[] if log is None else log)
+        state = RunState(package, self.max_repairs, log=[] if log is None else log,
+                         budget=ContextBudget(self.max_context_requests))  # fmt: skip
         prompt = package.user + (f"\nIndicación del analista: {analyst_note}" if analyst_note.strip() else "")
         info = asyncio.run(self._run(package, prompt, state))
         usage = dict(info.get("usage", {}))

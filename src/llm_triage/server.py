@@ -71,7 +71,7 @@ class App:
             llm = MockLLM(self.builder.build(alert_id)) if self.mode == "mock" else AnthropicLLM(self.model)
             result = self.runner.run(alert_id, llm, note, log=log)
         print(f"[llm_triage] {alert_id}: válido={result.valid} intentos={result.attempts} "
-              f"consultas={sum(s['type'] == 'consulta' for s in result.transcript)} {result.elapsed_s} s", file=sys.stderr, flush=True)  # fmt: skip
+              f"ampliaciones={sum(s['type'] == 'contexto' and not s['is_error'] for s in result.transcript)} {result.elapsed_s} s", file=sys.stderr, flush=True)  # fmt: skip
         return {"result": result.to_dict(), "prompt": self.prompt(alert_id)}
 
     # ------------------------------------------------------------ background jobs

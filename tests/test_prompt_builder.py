@@ -10,7 +10,7 @@ from src.prompt_builder.builder import compress_ids
 from src.prompt_builder.context import AffectedAsset, AffectedUser, InformativeLog
 from src.prompt_builder.policy import load_policy
 from src.prompt_builder.runbooks import PROFILES, load_runbooks, parse_runbook
-from src.prompt_builder.tools import execute, tool_definition
+from src.prompt_builder.tools import execute, query_names, tool_definition
 
 DOCS = Path("docs")
 needs_docs = pytest.mark.skipif(not (DOCS / "03_alertas" / "alertas.jsonl").exists(), reason="dataset docs/ missing")
@@ -94,7 +94,8 @@ def test_builder_with_fake_context():
     by_name = {q.name: q for q in pk.queries}
     assert {"runbook_text", "alert_enriched", "host_activity", "hash_activity"} <= set(by_name)
     assert by_name["host_activity"].example == ["WS-1", "2026-10-09T10:00:00.000Z", "2026-10-11T10:00:00.000Z"]
-    assert set(pk.tool["input_schema"]["properties"]["consulta"]["enum"]) == set(by_name)
+    assert set(query_names(pk.tool)) == set(by_name)
+    assert "motivo" in pk.tool["input_schema"]["required"]
     assert pk.response_schema["title"].startswith("Ticket de triaje")
 
 
@@ -133,7 +134,7 @@ def test_compress_ids_is_exact():
 
 def test_tool_rejects_unknown_queries_and_wrong_arity():
     conn = sqlite3.connect(":memory:")
-    assert tool_definition(["log_detail"])["input_schema"]["properties"]["consulta"]["enum"] == ["log_detail"]
+    assert query_names(tool_definition(["log_detail"])) == ["log_detail"]
     with pytest.raises(ValueError):
         execute(conn, "DROP TABLE x", [])
     with pytest.raises(ValueError):

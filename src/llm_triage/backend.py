@@ -1,4 +1,4 @@
-"""Dataset backend for the read function `consultar_bd`, used until the database exists.
+"""Dataset backend for the catalogue queries of `solicitar_contexto`, used until the database exists.
 
 Why: the LLM loop must be the same with or without the database. This backend answers the catalogue functions
 from docs/ (alerts, inventory, intelligence, runbooks, policy, logs) with the same parameters and the same kind
@@ -53,7 +53,7 @@ SUMMARY = ("event_id", "source", "timestamp", "user_key", "hostname", "src_ip", 
 
 
 class DatasetToolBackend:
-    """Answers `consultar_bd(consulta, parametros)` from the dataset."""
+    """Answers each catalogue query of a `solicitar_contexto` request from the dataset."""
 
     def __init__(self, source: DatasetContextSource, builder: PromptBuilder) -> None:
         self.src, self.builder, self.data = source, builder, source.data

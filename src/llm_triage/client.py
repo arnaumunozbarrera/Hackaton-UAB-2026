@@ -1,14 +1,13 @@
 """LLM triage loop against the Anthropic Messages API, with a mock model for offline use.
 
-Why: one loop sends the prompt package, answers `consultar_bd` calls through a backend (dataset today, database
-later) and forces the result through the `emitir_ticket` tool, whose input schema is the ticket schema. Every
+Why: one loop sends the prompt package, answers type-2 responses (`solicitar_contexto`: read-only context requests
+with a reason) through a backend (dataset today, database later) and forces the result through the `emitir_ticket` tool, whose input schema is the ticket schema. Every
 ticket is validated (schema + policy); an invalid one is sent back to the model as a tool error, up to
 `max_repairs` times, so the caller always receives the same format or an explicit failure.
 """
 
 from __future__ import annotations
 
-import json
 import os
 import time
 from dataclasses import asdict, dataclass, field
@@ -17,11 +16,11 @@ from typing import Any, Protocol
 
 from ..prompt_builder import PromptBuilder, PromptPackage
 from ..prompt_builder.tools import TOOL_NAME
+from .context_requests import ContextBudget, handle_context_request
 from .validator import tool_schema, validate_ticket
 
 TICKET_TOOL = "emitir_ticket"
 DEFAULT_MODEL = "claude-sonnet-5-5"
-RESULT_PREVIEW = 6000
 FINAL_INSTRUCTION = "\nEntrega: cuando termines, llama a la herramienta emitir_ticket con el ticket completo. Es la única salida válida."
 
 
@@ -65,8 +64,12 @@ class MockLLM:
         self.calls += 1
         p = self.package
         if self.calls == 1:
-            block = {"type": "tool_use", "id": "mock-1", "name": TOOL_NAME,
-                     "input": {"consulta": "runbook_text", "parametros": [p.metadata["rule_id"]]}}  # fmt: skip
+            request = {
+                "motivo": "Necesito las comprobaciones y la decisión del runbook antes de valorar la alerta.",
+                "comprobacion": "C1",
+                "consultas": [{"consulta": "runbook_text", "parametros": [p.metadata["rule_id"]]}],
+            }
+            block = {"type": "tool_use", "id": "mock-1", "name": TOOL_NAME, "input": request}  # fmt: skip
             return {"content": [block], "stop_reason": "tool_use", "usage": {"input_tokens": 0, "output_tokens": 0}}
         ticket = {
             "ticket_id": f"TKT-MOCK-{p.alert_id}", "alert_ids": [p.alert_id],
@@ -119,9 +122,16 @@ def _add_usage(total: dict[str, int], usage: dict[str, Any] | None) -> None:
 class TriageRunner:
     """Prompt package -> LLM with tools -> validated ticket."""
 
-    def __init__(self, builder: PromptBuilder, backend: Backend, max_turns: int = 12, max_repairs: int = 2) -> None:
+    def __init__(
+        self,
+        builder: PromptBuilder,
+        backend: Backend,
+        max_turns: int = 12,
+        max_repairs: int = 2,
+        max_context_requests: int = 6,
+    ) -> None:
         self.builder, self.backend = builder, backend
-        self.max_turns, self.max_repairs = max_turns, max_repairs
+        self.max_turns, self.max_repairs, self.max_context_requests = max_turns, max_repairs, max_context_requests
 
     def request(self, package: PromptPackage) -> dict[str, Any]:
         """Static part of the Messages API request (system, tools) with prompt caching."""
@@ -131,14 +141,14 @@ class TriageRunner:
         system = [{"type": "text", "text": package.system + FINAL_INSTRUCTION, "cache_control": {"type": "ephemeral"}}]
         return {"system": system, "tools": tools, "max_tokens": 4096}
 
-    def _tool_call(self, block: dict[str, Any], allowed: list[str], log: list[dict[str, Any]]) -> dict[str, Any]:
-        args = block.get("input") or {}
-        try:
-            rows = self.backend.execute(args.get("consulta", ""), list(args.get("parametros") or []), allowed)
-            content, error = json.dumps(rows, ensure_ascii=False, default=str)[:RESULT_PREVIEW], False
-        except (ValueError, TypeError) as exc:
-            content, error = f"Error: {exc}", True
-        log.append({"type": "consulta", "input": args, "output": content[:1500], "is_error": error})
+    def _tool_call(
+        self, block: dict[str, Any], allowed: list[str], log: list[dict[str, Any]], budget: ContextBudget
+    ) -> dict[str, Any]:
+        if block["name"] != TOOL_NAME:
+            content, error = f"Herramienta desconocida: {block['name']}", True
+        else:
+            content, error, entry = handle_context_request(block.get("input") or {}, self.backend, allowed, budget)
+            log.append(entry)
         return {"type": "tool_result", "tool_use_id": block["id"], "content": content, "is_error": error}
 
     def run(
@@ -152,6 +162,7 @@ class TriageRunner:
         allowed, req = [q.name for q in package.queries], self.request(package)
         log = [] if log is None else log  # shared list: the UI polls it while the run is in progress
         usage: dict[str, int] = {}
+        budget = ContextBudget(self.max_context_requests)
         ticket, errors, attempts = None, ["el modelo no entregó ningún ticket"], 0
         for _ in range(self.max_turns):
             resp = model.create(messages=messages, **req)
@@ -175,7 +186,7 @@ class TriageRunner:
                         {"type": "tool_result", "tool_use_id": block["id"], "content": msg, "is_error": bool(errors)}
                     )
                 elif block["type"] == "tool_use":
-                    results.append(self._tool_call(block, allowed, log))
+                    results.append(self._tool_call(block, allowed, log, budget))
             if done:
                 break
             if not results:

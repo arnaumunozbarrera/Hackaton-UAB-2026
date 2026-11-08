@@ -12,7 +12,7 @@ Usage::
     package = builder.build("ALR-20261005-000172")
     messages = package.to_messages()          # [{"role": "system", ...}, {"role": "user", ...}]
     schema = package.response_schema          # ticket_salida.schema.json (structured output)
-    tool = package.tool                       # consultar_bd(consulta, parametros) definition
+    tool = package.tool                       # solicitar_contexto(motivo, consultas): response type 2
 """
 
 from .builder import PromptBuilder, PromptConfig, PromptPackage, RenderedQuery

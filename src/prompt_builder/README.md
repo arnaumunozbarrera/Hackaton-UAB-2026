@@ -12,7 +12,7 @@ El prompt es **compacto**: identifica y apunta a funciones de lectura que devuel
 |---|---|---|
 | `system` (igual para todas las alertas, se puede cachear) | rol, 8 reglas y la política compactada: ajustes, SLA, aprobaciones, escalado y agrupación | ~3,1 KB |
 | `user` | alerta, evidencia entre `<datos_no_confiables>`, identificadores (valores de los parámetros), afectados, severidad base con la fila de la matriz, plan del runbook (Cn→funciones) y notas, logs informativos agrupados con sus ID comprimidos sin pérdida, logs apartados con su referencia | ~1,5 KB de media (máx. 2,1 KB) |
-| `tool` | `consultar_bd(consulta, parametros)`: enum con las consultas de la alerta y sus firmas | ~2 KB |
+| `tool` | `solicitar_contexto(motivo, comprobacion?, consultas[1..5])`: respuesta de tipo 2, con el enum de consultas de la alerta y sus firmas | ~2,4 KB |
 | `response_schema` | `ticket_salida.schema.json` para la salida estructurada (no va dentro del texto) | — |
 
 Lo que el LLM lee bajo demanda en lugar de recibirlo pegado: el texto del runbook (`runbook_text`), el detalle
@@ -45,7 +45,7 @@ builder = PromptBuilder(DatasetContextSource("docs"), PromptConfig(max_logs=40))
 package = builder.build("ALR-20261005-000172")
 messages = package.to_messages()      # [{"role": "system", ...}, {"role": "user", ...}]
 schema = package.response_schema      # para la salida estructurada del LLM
-tool = package.tool                   # definición de consultar_bd para el LLM
+tool = package.tool                   # definición de solicitar_contexto (respuesta de tipo 2)
 
 # cuando exista la base de datos, el bucle de herramientas solo tiene que hacer:
 # from src.prompt_builder import connect_read_only, execute

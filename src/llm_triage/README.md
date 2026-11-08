@@ -3,17 +3,29 @@
 Cierra el ciclo **prompt → LLM → ticket validado** sin depender todavía de la base de datos.
 
 ```
-PromptBuilder.build(alert_id) ──► system + user + herramienta consultar_bd + esquema del ticket
+PromptBuilder.build(alert_id) ──► system + user + herramienta solicitar_contexto + esquema del ticket
         │
         ▼
-TriageRunner.run()  ── Messages API (Anthropic) ──►  el LLM llama a consultar_bd(consulta, parametros)
+TriageRunner.run()  ── Messages API (Anthropic) ──►  tipo 2: el LLM pide más datos con solicitar_contexto(motivo, consultas)
         │                                              └─ DatasetToolBackend responde desde docs/ (luego, la BD)
-        │                                           el LLM entrega el ticket llamando a emitir_ticket
+        │                                           tipo 1: el LLM entrega el ticket llamando a emitir_ticket
         ▼
 validate_ticket()  esquema (Draft 2020-12) + reglas de política → si falla, se devuelve el error al LLM (máx. 2 correcciones)
         ▼
 TriageResult: ticket, valid, errors, attempts, transcript (consultas hechas), usage (tokens), elapsed_s
 ```
+
+## Dos tipos de respuesta del LLM
+| Tipo | Herramienta | Cuándo | Qué ve el analista |
+|---|---|---|---|
+| 1. Veredicto | `emitir_ticket` | tiene contexto suficiente | la tarjeta del ticket, ya validado |
+| 2. Ampliación de contexto | `solicitar_contexto(motivo, comprobacion?, consultas[1..5])` | la identificación del prompt no basta para decidir | un mensaje en el chat por cada ampliación: motivo, comprobación del runbook, consultas y filas leídas (solo lectura) |
+
+Reglas del tipo 2 (`context_requests.py`):
+- El motivo es obligatorio (mínimo 10 caracteres). Sin él, la petición se rechaza y el rechazo también se muestra.
+- Entre 1 y 5 consultas del catálogo por petición, y como máximo 6 ampliaciones por alerta. Al alcanzar el límite, se pide
+  al modelo que entregue el ticket con lo que tenga (`needs_more_info` y `open_questions` si falta algo).
+- Los errores de una consulta concreta vuelven al modelo sin anular el resto de la petición.
 
 ## Formato siempre igual
 - El ticket solo puede llegar como entrada de la herramienta `emitir_ticket`, cuyo `input_schema` es
@@ -44,10 +56,10 @@ Todo el contenido se pinta con `textContent`, porque los datos pueden contener t
 `ClaudeCodeRunner` usa el Claude Agent SDK, que lanza el CLI de Claude Code con **la sesión de tu plan** (Pro o Max).
 Ese consumo sale de los límites de uso del plan, no de créditos de API. Es para uso personal y local.
 
-- Las dos herramientas (`consultar_bd` y `emitir_ticket`) corren dentro del proceso como servidor MCP del SDK, con el
+- Las dos herramientas (`solicitar_contexto` y `emitir_ticket`) corren dentro del proceso como servidor MCP del SDK, con el
   mismo backend y el mismo validador que el modo API.
 - `tools=[]` quita las herramientas integradas de Claude Code (Bash, Read, Web...) y `setting_sources=[]` ignora
-  `CLAUDE.md` y tu configuración: el agente solo puede leer con `consultar_bd`.
+  `CLAUDE.md` y tu configuración: el agente solo puede leer con `solicitar_contexto`.
 - Al arrancar en este modo se **retira `ANTHROPIC_API_KEY` del proceso**: si estuviera definida, Claude Code
   facturaría por API en lugar de usar tu plan.
 
@@ -68,5 +80,5 @@ con pasar a `TriageRunner` un backend que use `prompt_builder.tools.execute` con
 ```powershell
 python -m pytest tests/test_llm_triage.py -q
 ```
-Son 15 tests y no usan la red: validación (válido y 6 tipos de error), backend, petición con caché, modo mock, un
-modelo simulado que entrega un ticket inválido y lo corrige, el abandono tras el máximo de correcciones, y los manejadores y opciones del modo Claude Code.
+Son 17 tests y no usan la red: validación (válido y 6 tipos de error), backend, petición con caché, modo mock, un
+modelo simulado que entrega un ticket inválido y lo corrige, el abandono tras el máximo de correcciones, los manejadores y opciones del modo Claude Code, las tareas en segundo plano y las reglas del tipo 2 (motivo, límite de consultas y de ampliaciones).

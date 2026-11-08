@@ -1,8 +1,10 @@
-"""Read function exposed to the LLM: `consultar_bd(consulta, parametros)`.
+"""Read function exposed to the LLM: `solicitar_contexto(motivo, consultas)` (response type 2).
 
 Why: putting SQL in the prompt costs ~3.5 KB per alert. Instead the prompt lists function names and their
-parameters, and the executor maps each name to a catalogue query that selects only the relevant columns. The
-LLM cannot run arbitrary SQL through this tool, results are capped, and values are always bound with `?`.
+parameters, and the executor maps each name to a catalogue query that selects only the relevant columns. Every
+read is a *context request*: the model must say why the current context is not enough (shown to the user) and
+may ask for at most MAX_QUERIES_PER_REQUEST queries at once. It cannot run arbitrary SQL, results are capped,
+and values are always bound with `?`.
 """
 
 from __future__ import annotations
@@ -12,8 +14,10 @@ from typing import Any
 
 from .schema import QUERIES, SchemaMap
 
-TOOL_NAME = "consultar_bd"
+TOOL_NAME = "solicitar_contexto"
 MAX_ROWS = 50
+MAX_QUERIES_PER_REQUEST = 5
+MIN_REASON_CHARS = 10
 
 
 def signature(name: str) -> str:
@@ -25,18 +29,40 @@ def tool_definition(names: list[str] | None = None) -> dict[str, Any]:
     """Provider-neutral function definition (name, description, JSON Schema of the input)."""
     allowed = sorted(names or QUERIES)
     catalogue = "; ".join(f"{signature(n)}: {QUERIES[n].purpose}" for n in allowed)
+    query = {
+        "type": "object",
+        "properties": {
+            "consulta": {"type": "string", "enum": allowed},
+            "parametros": {"type": "array", "items": {"type": "string"}, "description": "valores en orden"},
+        },
+        "required": ["consulta", "parametros"],
+    }
     return {
         "name": TOOL_NAME,
-        "description": f"Lectura de la base de datos del SOC (máx. {MAX_ROWS} filas). Consultas: {catalogue}",
+        "description": (
+            "Respuesta de tipo 2: úsala cuando el contexto no baste para dar el veredicto. Lee datos de la base de "
+            f"datos en solo lectura (máx. {MAX_QUERIES_PER_REQUEST} consultas por petición, {MAX_ROWS} filas cada una). "
+            f"Indica siempre el motivo; se muestra al analista. Consultas: {catalogue}"
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "consulta": {"type": "string", "enum": allowed},
-                "parametros": {"type": "array", "items": {"type": "string"}, "description": "valores en orden"},
+                "motivo": {
+                    "type": "string",
+                    "minLength": MIN_REASON_CHARS,
+                    "description": "qué información falta para decidir y por qué la necesitas",
+                },
+                "comprobacion": {"type": "string", "description": "comprobación del runbook que responde (C1, C2...)"},
+                "consultas": {"type": "array", "items": query, "minItems": 1, "maxItems": MAX_QUERIES_PER_REQUEST},
             },
-            "required": ["consulta", "parametros"],
+            "required": ["motivo", "consultas"],
         },
     }
+
+
+def query_names(tool: dict[str, Any]) -> list[str]:
+    """Allowed query names of a tool definition."""
+    return tool["input_schema"]["properties"]["consultas"]["items"]["properties"]["consulta"]["enum"]
 
 
 def execute(

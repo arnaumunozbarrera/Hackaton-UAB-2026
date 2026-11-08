@@ -87,14 +87,15 @@ def test_request_uses_cache_and_ticket_tool(stack):
     req = TriageRunner(builder, backend).request(builder.build(ALERT))
     assert req["system"][0]["cache_control"] == {"type": "ephemeral"}
     names = [t["name"] for t in req["tools"]]
-    assert names == ["consultar_bd", TICKET_TOOL] and "$schema" not in req["tools"][1]["input_schema"]
+    assert names == ["solicitar_contexto", TICKET_TOOL] and "$schema" not in req["tools"][1]["input_schema"]
 
 
 def test_mock_run_is_valid(stack):
     builder, backend = stack
     result = TriageRunner(builder, backend).run(ALERT, MockLLM(builder.build(ALERT)))
     assert result.valid and result.attempts == 1
-    assert [s["type"] for s in result.transcript] == ["consulta", "ticket"]
+    assert [s["type"] for s in result.transcript] == ["contexto", "ticket"]
+    assert result.transcript[0]["motivo"] and result.transcript[0]["consultas"][0]["consulta"] == "runbook_text"
 
 
 class ScriptedLLM:
@@ -124,8 +125,11 @@ def test_invalid_ticket_is_sent_back_and_repaired(stack, ticket):
             {
                 "type": "tool_use",
                 "id": "q1",
-                "name": "consultar_bd",
-                "input": {"consulta": "no_existe", "parametros": []},
+                "name": "solicitar_contexto",
+                "input": {
+                    "motivo": "Necesito ver si la IP tuvo accesos correctos",
+                    "consultas": [{"consulta": "no_existe", "parametros": []}],
+                },
             }
         ],
         _ticket_block(2, bad),
@@ -133,7 +137,7 @@ def test_invalid_ticket_is_sent_back_and_repaired(stack, ticket):
     )
     result = TriageRunner(builder, backend).run(ALERT, llm)
     assert result.valid and result.attempts == 2 and result.usage["input_tokens"] == 30
-    assert result.transcript[0]["is_error"]  # unknown query reported to the model as a tool error
+    assert result.transcript[0]["consultas"][0]["error"]  # unknown query reported back to the model
     last_feedback = llm.seen[-1][-1]["content"][0]
     assert last_feedback["is_error"] and "summary" in last_feedback["content"]
 
@@ -156,10 +160,19 @@ def test_claude_code_handlers_validate_and_report(stack, ticket):
     builder, backend = stack
     state = RunState(builder.build(ALERT), max_repairs=1)
     h = ToolHandlers(backend, state)
-    ok = asyncio.run(h.consultar({"consulta": "runbook_text", "parametros": ["UC-WEB-001"]}))
+    ok = asyncio.run(
+        h.solicitar_contexto(
+            {
+                "motivo": "Necesito el runbook de la regla",
+                "consultas": [{"consulta": "runbook_text", "parametros": ["UC-WEB-001"]}],
+            }
+        )
+    )
     assert "RB-05" in ok["content"][0]["text"] and "is_error" not in ok
-    bad_query = asyncio.run(h.consultar({"consulta": "no_existe", "parametros": []}))
-    assert bad_query["is_error"]
+    no_reason = asyncio.run(
+        h.solicitar_contexto({"motivo": "", "consultas": [{"consulta": "runbook_text", "parametros": ["UC-WEB-001"]}]})
+    )
+    assert no_reason["is_error"] and state.log[-1]["is_error"]
     bad = copy.deepcopy(ticket)
     bad.pop("summary")
     first = asyncio.run(h.emitir(bad))
@@ -195,6 +208,41 @@ def test_background_job_survives_without_holding_the_request():
             break
         time.sleep(0.1)
     assert job["status"] == "done" and job["result"]["valid"]
-    assert [s["type"] for s in job["transcript"]] == ["consulta", "ticket"]
+    assert [s["type"] for s in job["transcript"]] == ["contexto", "ticket"]
     with pytest.raises(KeyError):
         app.start_job("ALR-NO-EXISTE")
+
+
+# ---------------------------------------------------------------- response type 2: context requests
+def _request(motivo, *queries):
+    return {"motivo": motivo, "consultas": [{"consulta": q, "parametros": p} for q, p in queries]}
+
+
+def test_context_request_requires_reason_and_limits(stack):
+    from src.llm_triage.context_requests import ContextBudget, handle_context_request
+
+    _, backend = stack
+    allowed = ["runbook_text", "log_detail", "indicator"]
+    budget = ContextBudget(max_requests=2)
+    text, error, entry = handle_context_request(
+        _request("corto", ("runbook_text", ["UC-WEB-001"])), backend, allowed, budget
+    )
+    assert error and "motivo" in text and budget.used == 0
+    many = _request("Necesito ver todos los logs citados", *[("log_detail", ["WAF-0001840"])] * 6)
+    assert handle_context_request(many, backend, allowed, budget)[1]
+    reason = "Necesito saber si la IP de origen es conocida en el TIP y la GeoIP"
+    text, error, entry = handle_context_request(
+        _request(reason, ("indicator", ["198.18.11.49"]), ("log_detail", ["WAF-0001840"])), backend, allowed, budget
+    )
+    assert (
+        not error
+        and entry["n"] == 1
+        and entry["motivo"] == reason
+        and [q["filas"] for q in entry["consultas"]] == [1, 1]
+    )
+    assert json.loads(text)[0]["resultado"][0]["as_org"].startswith("Hosting")
+    handle_context_request(_request(reason, ("runbook_text", ["UC-WEB-001"])), backend, allowed, budget)
+    text, error, _ = handle_context_request(
+        _request(reason, ("runbook_text", ["UC-WEB-001"])), backend, allowed, budget
+    )
+    assert error and "Límite" in text and budget.used == 2

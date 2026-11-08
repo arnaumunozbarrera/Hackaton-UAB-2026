@@ -21,6 +21,9 @@
   .msg { max-width:100%; border-radius:10px; padding:10px 12px; border:1px solid var(--line); background:var(--panel); }
   .msg.user { align-self:flex-end; background:#e9effd; border-color:#c9d6f7; max-width:80%; }
   .msg.error { border-color:var(--bad); color:var(--bad); }
+  .msg.step { border-left:4px solid var(--warn); background:#fffaf0; }
+  .msg.step.err { border-left-color:var(--bad); }
+  .msg.step b { display:block; margin-bottom:4px; }
   .msg h3 { margin:0 0 6px; font-size:15px; }
   .row { display:flex; gap:6px; flex-wrap:wrap; margin:4px 0 8px; }
   .badge { font-size:12px; padding:2px 8px; border-radius:6px; background:var(--code); }
@@ -62,7 +65,7 @@
     <div id="examples"><span class="muted">Ejemplos por runbook:</span></div>
     <div id="messages">
       <div class="msg"><p class="muted">Escribe un alert_id (o elige un ejemplo) y, si quieres, una indicación para el analista virtual.
-      El panel derecho muestra el prompt, la herramienta de lectura, las consultas que hace el LLM y la validación del formato.</p></div>
+      Cuando el LLM necesita más datos para decidir, verás aquí cada ampliación de contexto (solo lectura) con su motivo. El panel derecho muestra el prompt, la herramienta, las llamadas y la validación.</p></div>
     </div>
     <form id="form">
       <input id="alert" list="alert-list" placeholder="ALR-20261005-000172" autocomplete="off" required>
@@ -131,7 +134,9 @@ function renderSidebar() {
     if (!r) { body.append(el("p", { class: "muted", text: "Aún no se ha enviado la alerta al LLM." })); return; }
     r.transcript.forEach((s, i) => {
       const box = el("div", { class: "call" + (s.is_error || (s.errors && s.errors.length) ? " err" : "") });
-      box.append(el("b", { text: `${i + 1}. ${s.type}` }));
+      box.append(el("b", { text: s.type === "contexto" ? `${i + 1}. Tipo 2 · ampliación de contexto ${s.n}` : s.type === "ticket" ? `${i + 1}. Tipo 1 · ticket (intento ${s.attempt})` : `${i + 1}. ${s.type}` }));
+      if (s.motivo) box.append(el("div", { text: "Motivo: " + s.motivo + (s.comprobacion ? ` (${s.comprobacion})` : "") }));
+      if (s.consultas) box.append(pre(s.consultas));
       if (s.input) box.append(pre(s.input));
       if (s.output) box.append(pre(s.output));
       if (s.errors) box.append(el("div", { class: "muted", text: s.errors.length ? "Errores: " + s.errors.join(" | ") : "Ticket válido" }));
@@ -148,6 +153,23 @@ function renderSidebar() {
   }
 }
 
+function stepMessage(s) {
+  // Every type-2 response (context request) and every rejected ticket is shown in the chat with its reason.
+  if (s.type === "contexto") {
+    const box = el("div", { class: "msg step" + (s.is_error ? " err" : "") });
+    box.append(el("b", { text: `Ampliación de contexto ${s.n} (solo lectura)${s.comprobacion ? " · " + s.comprobacion : ""}` }));
+    box.append(el("div", { text: "Motivo: " + (s.motivo || "(sin motivo)") }));
+    if (s.is_error) box.append(el("div", { class: "muted", text: "Rechazada: " + s.output }));
+    else box.append(el("ul", {}, s.consultas.map((q) => el("li", { text: `${q.consulta}(${q.parametros.join(", ")}) → ${q.error ? "error: " + q.error : q.filas + " filas"}` }))));
+    return box;
+  }
+  if (s.type === "ticket" && s.errors.length) {
+    return el("div", { class: "msg step err" }, el("b", { text: `Ticket ${s.attempt} rechazado por la validación; el LLM lo corrige` }),
+      el("ul", {}, s.errors.map((e) => el("li", { class: "muted", text: e }))));
+  }
+  return null;
+}
+
 function ticketCard(r) {
   const t = r.ticket || {};
   const card = el("div", { class: "msg" });
@@ -158,6 +180,7 @@ function ticketCard(r) {
     el("span", { class: "badge sev-" + (t.severity || ""), text: `severidad: ${t.severity ?? "?"}` }),
     el("span", { class: "badge", text: `confianza: ${t.confidence ?? "?"}` }),
     el("span", { class: "badge", text: `escalar: ${t.escalation?.escalate ? "sí → " + (t.escalation.to || "N2") : "no"}` }),
+    el("span", { class: "badge", text: `ampliaciones de contexto: ${r.transcript.filter((s) => s.type === "contexto" && !s.is_error).length}` }),
     el("span", { class: "badge", text: r.model })));
   if (!r.valid) card.append(el("ul", {}, r.errors.map((e) => el("li", { class: "muted", text: e }))));
   if (t.summary) card.append(el("div", { class: "section-title", text: "Resumen" }), el("p", { text: t.summary }));
@@ -192,12 +215,18 @@ $("form").addEventListener("submit", async (e) => {
     const { job_id } = await getJSON("/api/triage", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ alert_id: alertId, note }) });
     state.result = { transcript: [], usage: {}, errors: [], model: "", valid: false, attempts: 0, elapsed_s: 0 };
     state.tab = "llamadas"; renderTabs();
+    let shown = 0;
     for (;;) {
       await new Promise((ok) => setTimeout(ok, 1500));
       let job;
       try { job = await getJSON(`/api/job?id=${job_id}`); } catch (pollErr) { continue; }  // transient: retry
-      const calls = job.transcript.filter((s) => s.type === "consulta").length;
-      waiting.textContent = `Analizando (${job.elapsed_s} s): ${calls} consultas, ${job.transcript.filter((s) => s.type === "ticket").length} intentos de ticket...`;
+      for (; shown < job.transcript.length; shown++) {
+        const msg = stepMessage(job.transcript[shown]);
+        if (msg) waiting.before(msg);
+      }
+      const asks = job.transcript.filter((s) => s.type === "contexto" && !s.is_error).length;
+      waiting.textContent = `Analizando (${job.elapsed_s} s): ${asks} ampliaciones de contexto, ${job.transcript.filter((s) => s.type === "ticket").length} intentos de ticket...`;
+      $("messages").scrollTop = $("messages").scrollHeight;
       state.result = Object.assign(state.result, { transcript: job.transcript }); renderSidebar();
       if (job.status === "done") { state.prompt = job.prompt; state.result = job.result; waiting.replaceWith(ticketCard(job.result)); renderSidebar(); break; }
       if (job.status === "error") throw new Error(job.error);
