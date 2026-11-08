@@ -78,11 +78,26 @@ reparaciones) → resultados en `triage_*` → el analista acepta o rechaza el v
 la contención se ejecuta contra la API simulada con aprobación y nunca sobre OT. Detalle y estado de la
 implementación: [implementation_docs/triage_workflow.md](implementation_docs/triage_workflow.md).
 
+### Cómo ejecutarlo
+
+Antes de la primera ejecución, crea la base solo con contexto:
+`bash scripts/create_db.sh --context-only --replace`. Después bastan tres comandos, cada uno en su terminal:
+
+1. **API SOC simulada** (`bash scripts/mock_api_dev.sh`): sirve la cola de alertas y los logs en
+   http://127.0.0.1:8000. Por defecto usa las 20 alertas de depuración; `TARVIA_MOCK_ALERTS=all` sirve la cola
+   completa. Debe quedarse en marcha mientras se usan los otros dos.
+2. **Triaje** (`python -m src.main --llm claude-code`): lee las alertas nuevas de la API, ejecuta las
+   comprobaciones básicas (cierre automático o pasa al LLM), llama al modelo y guarda los tickets en la base.
+   Imprime una línea por alerta y termina. Con `--llm anthropic` usa la clave de `.env`, con `--llm openai` un
+   modelo de un clúster y con `--llm mock` ningún modelo real. `--limit N` procesa solo N alertas.
+3. **Interfaz del analista** (`python -m src.webapp`): abre http://127.0.0.1:8080 para revisar cada alerta,
+   aceptar o rechazar el veredicto y aprobar las acciones de contención, que se envían a la API del paso 1.
+
 ```bash
-bash scripts/create_db.sh --context-only --replace     # base solo con contexto (una vez)
-bash scripts/mock_api_dev.sh                           # API simulada con 20 alertas de depuración (:8000)
-python -m src.main --llm claude-code                   # o anthropic | openai | mock | none; --limit N, --alert ID
-python -m src.webapp                                   # interfaz del analista: http://127.0.0.1:8080
+bash scripts/create_db.sh --context-only --replace     # una vez
+bash scripts/mock_api_dev.sh                           # terminal 1: API simulada (:8000)
+python -m src.main --llm claude-code                   # terminal 2: o anthropic | openai | mock | none
+python -m src.webapp                                   # terminal 3: http://127.0.0.1:8080
 ```
 
 Variables de entorno (todas opcionales):
