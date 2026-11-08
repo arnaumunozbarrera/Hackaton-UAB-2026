@@ -17,7 +17,7 @@ from typing import Any, Protocol
 
 from ..prompt_builder import PromptBuilder, PromptPackage
 from ..prompt_builder.tools import TOOL_NAME
-from ..severity import apply_matrix_severity
+from ..severity import apply_matrix_severity, assessment_for_ticket
 from .context_requests import ContextBudget, handle_context_request
 from .validator import tool_schema, validate_ticket
 
@@ -97,6 +97,7 @@ class TriageResult:
     transcript: list[dict[str, Any]] = field(default_factory=list)
     usage: dict[str, int] = field(default_factory=dict)
     elapsed_s: float = 0.0
+    severity_assessment: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -190,5 +191,6 @@ class TriageRunner:
             if not results:
                 results = [{"type": "text", "text": "Entrega el resultado llamando a emitir_ticket."}]
             messages.append({"role": "user", "content": results})
+        assessment = assessment_for_ticket(package.metadata, ticket) if not errors else None
         return TriageResult(alert_id, getattr(model, "model", "?"), ticket, not errors, errors, attempts, log, usage,
-                            round(time.monotonic() - started, 2))  # fmt: skip
+                            round(time.monotonic() - started, 2), assessment)  # fmt: skip

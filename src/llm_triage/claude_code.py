@@ -20,7 +20,7 @@ from typing import Any
 
 from ..prompt_builder import PromptBuilder, PromptPackage
 from ..prompt_builder.tools import TOOL_NAME
-from ..severity import apply_matrix_severity
+from ..severity import apply_matrix_severity, assessment_for_ticket
 from .client import TICKET_TOOL, Backend, TriageResult
 from .context_requests import ContextBudget, handle_context_request
 from .validator import tool_schema, validate_ticket
@@ -149,5 +149,6 @@ class ClaudeCodeRunner:
         usage = dict(info.get("usage", {}))
         if info.get("subtype") not in (None, "success"):
             state.log.append({"type": "fin", "output": f"Claude Code terminó con {info['subtype']}"})
+        assessment = assessment_for_ticket(package.metadata, state.ticket) if not state.errors else None
         return TriageResult(alert_id, self.model or self.model_label, state.ticket, not state.errors, state.errors,
-                            state.attempts, state.log, usage, round(time.monotonic() - started, 2))  # fmt: skip
+                            state.attempts, state.log, usage, round(time.monotonic() - started, 2), assessment)  # fmt: skip

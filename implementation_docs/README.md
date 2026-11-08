@@ -13,6 +13,8 @@ CSV derivados para alimentar relaciones:
 
 [Entradas y consultas de criticidad](criticidad_matriz.md): relaciones consultadas, procedencia y comprobación de cobertura antes de aplicar la matriz.
 
+[Evaluaciones y evidencias de severidad](severity_audit.md): tablas de histórico, campos, relaciones y registro de la justificación de cada cálculo.
+
 Los datos originales permanecen en `docs/`. El [esquema SQL](../src/database/schema.sql) y los cargadores de `src/database/` implementan este diseño.
 
 `python -m src.database.build` genera la base local `data/tarvia.sqlite` y el informe `data/tarvia.ingestion.json`, con recuentos, comprobaciones y huellas de las fuentes.

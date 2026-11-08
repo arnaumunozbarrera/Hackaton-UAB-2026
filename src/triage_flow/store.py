@@ -7,6 +7,8 @@ import sqlite3
 from datetime import datetime, timezone
 from typing import Any
 
+from . import severity_audit
+
 SEVERITY_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3, "informational": 4}
 DECISIONS = ("approve", "reject", "escalate", "investigate")
 HISTORY_VERDICTS = ("true_positive", "false_positive", "benign_true_positive")
@@ -18,9 +20,17 @@ def now() -> str:
 
 def save_ticket(conn: sqlite3.Connection, alert_id: str, ticket: dict[str, Any] | None, *, valid: bool,
                 route: str, model: str = "", errors: list[str] | None = None, attempts: int = 0,
-                usage: dict | None = None, transcript: list | None = None, elapsed_s: float = 0.0) -> None:  # fmt: skip
+                usage: dict | None = None, transcript: list | None = None, elapsed_s: float = 0.0,
+                severity_assessment: dict[str, Any] | None = None) -> None:  # fmt: skip
     """Store (or replace) the latest ticket of an alert. A re-triage clears any previous operator decision."""
     body = ticket if isinstance(ticket, dict) else {}
+    with conn:
+        _save_ticket(conn, alert_id, body, valid, route, model, errors, attempts, usage, transcript, elapsed_s)
+        if valid and severity_assessment is not None:
+            severity_audit.append_assessment(conn, alert_id, body, severity_assessment, now())
+
+
+def _save_ticket(conn, alert_id, body, valid, route, model, errors, attempts, usage, transcript, elapsed_s):
     conn.execute(
         "INSERT OR REPLACE INTO triage_tickets (alert_id, ticket_json, valid, errors_json, route, model, verdict, "
         "severity, confidence, escalate, attempts, usage_json, transcript_json, elapsed_s, created_at) "
@@ -32,7 +42,6 @@ def save_ticket(conn: sqlite3.Connection, alert_id: str, ticket: dict[str, Any] 
             json.dumps(usage or {}), json.dumps(transcript or [], ensure_ascii=False, default=str), elapsed_s, now(),
         ),
     )  # fmt: skip
-    conn.commit()
 
 
 def _ticket_row(row: sqlite3.Row) -> dict[str, Any]:
@@ -94,6 +103,7 @@ def get_ticket(conn: sqlite3.Connection, alert_id: str) -> dict[str, Any] | None
     if row is None:
         return None
     out = _ticket_row(row)
+    out["severity_assessments"] = severity_audit.history(conn, alert_id)
     out["selection"] = [
         dict(zip(("event_id", "source", "timestamp", "state", "reason", "reference"), r, strict=True))
         for r in conn.execute(

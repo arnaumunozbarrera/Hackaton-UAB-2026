@@ -7,6 +7,7 @@ the output schema travels as `response_schema` and the SQL stays in the executor
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta
@@ -110,6 +111,7 @@ class PromptBuilder:
         ctx_dir = self.cfg.data_dir / "01_contexto"
         self.runbooks: dict[str, Runbook] = load_runbooks(ctx_dir / "runbooks")
         self.policy: Policy = load_policy(ctx_dir / "politica_soc.md")
+        self.policy_hash = hashlib.sha256((ctx_dir / "politica_soc.md").read_bytes()).hexdigest()
         self.output_schema = json.loads((ctx_dir / "ticket_salida.schema.json").read_text(encoding="utf-8"))
         self.system = Template(self.cfg.system_template).substitute(
             company=self.cfg.company,
@@ -259,6 +261,8 @@ class PromptBuilder:
         } | severity | self._runbook(ctx, prof) | self._logs(ctx) | self._similar(ctx)  # fmt: skip
         user = Template(self.cfg.user_template).substitute(values)
         meta = {"rule_id": ctx.rule_id, "informative_logs": len(ctx.informative_logs),
+                "alert_id": ctx.alert_id,
+                "rule_severity": ctx.rule_severity, "matrix_row": severity["matrix_row"], "policy_hash": self.policy_hash,
                 "set_aside": {k: len(v) for k, v in ctx.set_aside.items()}, "base_severity": severity["base_severity"],
                 "criticality": severity["criticality"], "criticality_origin": severity["criticality_origin"],
                 "severity_rationale": severity["severity_rationale"],

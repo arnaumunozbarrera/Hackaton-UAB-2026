@@ -79,3 +79,5 @@ El modelo no calcula ni ajusta la severidad. Recibe el resultado de la matriz co
 `src/severity.py` incorpora ambos campos al ticket con el resultado y la explicación calculados en código, antes de validar el formato y las obligaciones de escalado. Si una respuesta antigua o incorrecta intenta enviarlos, esos valores se sustituyen por los del sistema. Esto se aplica al adaptador API, Claude Code y al modo simulado. Si la matriz no se puede calcular, no se acepta una severidad alternativa del modelo.
 
 La excepción del discriminador que asigna `informational` a ciertos cierres automáticos permanece como regla determinista existente; no la decide un modelo y queda fuera de esta retirada de la asignación de severidad al LLM. El resto del triaje y los datos originales de la política no se modifican.
+
+Cada nuevo triaje válido conserva el cálculo y sus evidencias en `severity_assessments` y `severity_evidence`, con copia de las entradas y versiones anteriores. Véase [el modelo de auditoría](severity_audit.md). Los ajustes todavía pendientes se identifican como no evaluados.

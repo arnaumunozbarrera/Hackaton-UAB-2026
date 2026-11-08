@@ -192,6 +192,11 @@ def test_pipeline_routes_and_persists(flow):
     assert summary["errors"] == 0 and summary["invalid"] == 0
     assert store.get_ticket(flow.conn, auto)["route"] == "discriminator"
     assert all(store.get_ticket(flow.conn, a)["route"] == "llm" for a in ids)  # high/critical first
+    for aid in ids + [auto]:
+        saved = store.get_ticket(flow.conn, aid)
+        assessment = saved["severity_assessments"][0]
+        assert assessment["final_severity"] == saved["ticket"]["severity"]
+        assert assessment["evidence"] and assessment["input_snapshot"]
     assert flow.conn.execute("SELECT COUNT(*) FROM alert_log_selection").fetchone()[0] > 0
     stats = store.stats(flow.conn)
     assert stats["alerts_triaged"] >= 6 and stats["embeddings"] == stats["alerts_total"]
@@ -245,5 +250,9 @@ def test_forced_llm_replaces_discriminator_ticket(flow):
     auto = flow.conn.execute("SELECT alert_id FROM triage_tickets WHERE route = 'discriminator' LIMIT 1").fetchone()
     if auto is None:
         pytest.skip("no discriminator ticket in this database copy")
+    previous = store.get_ticket(flow.conn, auto[0])["severity_assessments"]
     out = flow.triage(auto[0], force_llm=True, mode="mock")
     assert out["route"] == "llm" and store.get_ticket(flow.conn, auto[0])["model"] == "mock"
+    assessments = store.get_ticket(flow.conn, auto[0])["severity_assessments"]
+    assert len(assessments) == len(previous) + 1 and assessments[1:] == previous
+    assert assessments[0]["method"] == "matrix"
