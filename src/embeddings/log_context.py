@@ -20,7 +20,6 @@ from ..log_noise_discard.loaders import iter_source
 from ..log_noise_discard.stages import LogRecord, alert_values
 from ..log_noise_discard.templates import SOURCES, normalise_identity
 
-
 PRODUCT_SOURCES: dict[str, tuple[str, ...]] = {
     "EDR": ("edr_events",),
     "WAF": ("waf", "proxy", "dns", "firewall"),
@@ -68,7 +67,9 @@ def _event_strings(value: Any) -> set[str]:
     return set()
 
 
-def _score(alert: Mapping[str, Any], record: LogRecord, alert_ts: datetime, values: set[str], preferred: tuple[str, ...]) -> tuple[float, str]:
+def _score(
+    alert: Mapping[str, Any], record: LogRecord, alert_ts: datetime, values: set[str], preferred: tuple[str, ...]
+) -> tuple[float, str]:
     event = record.event
     event_values = _event_strings(event)
     shared = values & event_values
@@ -119,7 +120,9 @@ def collect_dataset_candidates(data_dir: str, alert: Mapping[str, Any], max_cand
             event_values = _event_strings(event)
             if not values & event_values:
                 continue
-            record = LogRecord(event["event_id"], source, spec.template(event), str(spec.entity(event)).lower(), size, event)
+            record = LogRecord(
+                event["event_id"], source, spec.template(event), str(spec.entity(event)).lower(), size, event
+            )
             score, _ = _score(alert, record, alert_ts, values, preferred)
             if score >= 0:
                 candidates_by_source[source].append(record)
@@ -145,9 +148,7 @@ def collect_dataset_candidates_for_alerts(
         for value in _candidate_values(alert):
             value_to_alerts[value].add(alert_id)
 
-    candidates: dict[str, defaultdict[str, list[LogRecord]]] = {
-        alert_id: defaultdict(list) for alert_id in alerts
-    }
+    candidates: dict[str, defaultdict[str, list[LogRecord]]] = {alert_id: defaultdict(list) for alert_id in alerts}
     for source, spec in SOURCES.items():
         for event, size in iter_source(Path(data_dir), spec):
             matched_ids: set[str] = set()
@@ -155,7 +156,9 @@ def collect_dataset_candidates_for_alerts(
                 matched_ids.update(value_to_alerts.get(value, ()))
             for alert_id in matched_ids:
                 alert = alerts[alert_id]
-                record = LogRecord(event["event_id"], source, spec.template(event), str(spec.entity(event)).lower(), size, event)
+                record = LogRecord(
+                    event["event_id"], source, spec.template(event), str(spec.entity(event)).lower(), size, event
+                )
                 score, _ = _score(
                     alert,
                     record,
@@ -251,5 +254,7 @@ def log_context_text(selected: Iterable[SelectedLog]) -> str:
             "domain": event.get("domain") or event.get("query"),
             "selection_reason": item.reason,
         }
-        rows.append(json.dumps({k: v for k, v in safe.items() if v not in (None, "")}, ensure_ascii=False, sort_keys=True))
+        rows.append(
+            json.dumps({k: v for k, v in safe.items() if v not in (None, "")}, ensure_ascii=False, sort_keys=True)
+        )
     return "\n".join(rows)

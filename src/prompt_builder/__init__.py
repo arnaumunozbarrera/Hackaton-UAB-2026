@@ -17,10 +17,11 @@ Usage::
 
 from .builder import PromptBuilder, PromptConfig, PromptPackage, RenderedQuery
 from .context import AlertContext, ContextSource, DatasetContextSource
+from .db_context import DbContextSource, StoredSelection
 from .schema import QUERIES, SchemaMap
 from .tools import TOOL_NAME, connect_read_only, execute, tool_definition
 
 __all__ = [
-    "QUERIES", "AlertContext", "ContextSource", "DatasetContextSource", "PromptBuilder", "PromptConfig",
+    "QUERIES", "AlertContext", "ContextSource", "DatasetContextSource", "DbContextSource", "StoredSelection", "PromptBuilder", "PromptConfig",
     "PromptPackage", "RenderedQuery", "SchemaMap", "TOOL_NAME", "connect_read_only", "execute", "tool_definition",
 ]  # fmt: skip

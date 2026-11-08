@@ -56,6 +56,27 @@ y que los archivos de entrada no hayan cambiado. Las anomalías de origen se con
 Una base existente no se sustituye salvo que se indique `--replace` de forma explícita.
 Ese modo reconstruye también el histórico: no debe utilizarse para incorporar resultados de triaje.
 
+## Flujo completo de triaje
+
+```
+SOC API ─► database.sync ─► BD (schema.sql + enrich: vistas del catálogo, dim_log, pipeline.sql)
+        ─► selección de logs (log_noise_discard, persistida en alert_log_selection)
+        ─► discriminador (todo explicado por contexto → ticket determinista, sin LLM)
+        ─► embeddings (alertas similares ya resueltas) ─► prompt_builder (DbContextSource)
+        ─► LLM (solicitar_contexto sobre la BD en solo lectura) ─► validador ─► triage_tickets
+        ─► front (cola por criticidad, decisión del operador) ─► alert_history
+```
+
+| Paso | Comando |
+|---|---|
+| Capa derivada (vistas, selección, embeddings; incremental) | `python -m src.database.enrich` |
+| Triaje por lotes | `python -m src.main --no-sync --limit 50 [--mode mock\|anthropic\|claude-code]` |
+| Front + API (cola, histórico, estadísticas, decisiones) | `python -m src.llm_triage serve --mock` → `http://127.0.0.1:8765` |
+| Tiempo real: BD sin alertas + ingesta periódica desde la SOC API | `python -m src.database.live` y `python -m src.llm_triage serve --mock --db data/tarvia_live.sqlite --live 10 --live-batch 3` (con `scripts/mock_api.ps1` arrancado) |
+
+El chat de depuración del prompt sigue en `/chat`; `serve --dataset` mantiene el modo original sobre `docs/`.
+El estado del proyecto está en [implementation_docs/estado_proyecto.md](implementation_docs/estado_proyecto.md).
+
 Validación del código y de la base cargada:
 
 ```bash

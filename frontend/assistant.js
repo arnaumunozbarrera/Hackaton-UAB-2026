@@ -39,7 +39,7 @@
         </section>
         <aside class="ai-aside">
           <section class="ai-card"><div class="ai-card-head"><h4>Live data snapshot</h4><span class="mono">Now</span></div><div class="ai-snapshot">
-            <div style="--c:var(--deep)"><small>Total alerts</small><b>${state.alerts.length}</b></div>
+            <div style="--c:var(--deep)"><small>Alerts in queue</small><b>${state.alerts.length}</b></div>
             <div style="--c:var(--orange)"><small>Pending approval</small><b>${pending.length}</b></div>
             <div style="--c:var(--red)"><small>Immediate action</small><b>${critical}</b></div>
             <div style="--c:var(--blue)"><small>Source systems</small><b>${sources}</b></div></div></section>

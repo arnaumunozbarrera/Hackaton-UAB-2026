@@ -1,0 +1,189 @@
+/* Sentinel views: shell, dashboard panels, investigation workspace and decision ledger.
+   Reuses app.js state, render/bind cycle, ids and data attributes; data comes from window.Live (api.js). */
+(function(){
+  const L=window.Live;
+  const E=v=>esc(v==null?'':v);
+  const P='<svg viewBox="0 0 24 24" aria-hidden="true" class="ic">';
+  const I={
+    shield:P+'<path d="M12 2.5l7.5 2.8v5.9c0 4.8-3.2 8.9-7.5 10.3-4.3-1.4-7.5-5.5-7.5-10.3V5.3z"/><path d="M8.6 12.1l2.4 2.4 4.6-4.9"/></svg>',
+    chart:P+'<path d="M4 20V11M10 20V5M16 20v-7M21 20H3"/></svg>',
+    history:P+'<path d="M3.5 12a8.5 8.5 0 1 0 2.6-6.1L3.5 8.4"/><path d="M3.5 3.8v4.6h4.6M12 7.5V12l3 2"/></svg>',
+    spark:P+'<path d="M11 3l1.6 4.4L17 9l-4.4 1.6L11 15l-1.6-4.4L5 9l4.4-1.6zM18 14l.8 2.2L21 17l-2.2.8L18 20l-.8-2.2L15 17l2.2-.8z"/></svg>',
+    search:P+'<circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.3-4.3"/></svg>',
+    bell:P+'<path d="M6 16.5V11a6 6 0 0 1 12 0v5.5l1.5 1.5h-15zM10 20.5a2 2 0 0 0 4 0"/></svg>',
+    cal:P+'<rect x="3.5" y="5" width="17" height="15.5" rx="2"/><path d="M3.5 9.5h17M8 3v4M16 3v4"/></svg>',
+    down:P+'<path d="M6 9l6 6 6-6"/></svg>', right:P+'<path d="M9 6l6 6-6 6"/></svg>',
+    refresh:P+'<path d="M20 12a8 8 0 1 1-2.3-5.7L20 8.5"/><path d="M20 3.5v5h-5"/></svg>',
+    check:P+'<path d="M5 12.5l4.5 4.5L19 7.5"/></svg>', trend:P+'<path d="M3 17l6-6 4 4 8-8"/><path d="M15 7h6v6"/></svg>',
+    cog:P+'<circle cx="12" cy="12" r="3.2"/><path d="M12 2.8v2.6M12 18.6v2.6M4.2 7.5l2.2 1.3M17.6 15.2l2.2 1.3M4.2 16.5l2.2-1.3M17.6 8.8l2.2-1.3"/><circle cx="12" cy="12" r="7"/></svg>',
+    expand:P+'<path d="M4 9V4h5M15 4h5v5M4 15v5h5M20 15v5h-5"/></svg>',
+    play:P+'<path d="M8 5.5v13l10.5-6.5z"/></svg>'
+  };
+  window.SentinelIcons=I;
+  const PRIORITY={Critical:'Immediate action',High:'Urgent',Medium:'Normal',Low:'Non-urgent'};
+  const SEVCLR={critical:'#e5484d',high:'#f08c2e',medium:'#e9b73b',low:'#2f9e5b',informational:'#7c93a8'};
+  const num=n=>Number(n||0).toLocaleString('en-GB');
+  const pct=(a,b)=>b?Math.round(100*a/b):0;
+  const greeting=()=>{const h=new Date().getHours();return h<12?'Good morning':h<20?'Good afternoon':'Good evening'};
+  const clock=()=>{const d=new Date();const date=d.toLocaleDateString('en-US',{timeZone:'Europe/Madrid',month:'short',day:'numeric',year:'numeric'});const time=d.toLocaleTimeString('en-GB',{timeZone:'Europe/Madrid',hour12:false});return `${date} · ${time} (${d.toLocaleTimeString('en-GB',{timeZone:'Europe/Madrid',timeZoneName:'short'}).split(' ').pop()})`};
+  const ago=()=>L.loadedAt?`Updated ${Math.max(0,Math.round((Date.now()-L.loadedAt)/1000))} seconds ago`:(L.error?'Backend offline':'Connecting…');
+  const head=(icon,tone,title,sub,extra,key)=>`<div class="panel-head"><div class="panel-title"><span class="p-ic ${tone}">${icon}</span><div><h3>${title}</h3>${sub?`<p>${sub}</p>`:''}</div>${extra||''}</div><button class="expand" data-expand="${key}" aria-label="Expand panel">${I.expand}</button></div>`;
+  const offline=msg=>`<div class="empty"><b>${msg}</b><br/>Start the backend: <span class="mono">python -m src.llm_triage serve --mock</span>${L.error?`<br/><small>${E(L.error)}</small>`:''}</div>`;
+
+  /* ----------------------------------------------------------------------------------------- shell */
+  icon=x=>`<span class="nav-icon">${x}</span>`;
+  shell=function(content){
+    const page=state.page,s=L.stats||{};
+    const nav=[['ops',I.chart,'Operations center'],['history',I.history,'Decision history'],['assistant',I.spark,'AI Intelligence Assistant']];
+    const titles={ops:['OPERATIONS','Alert operations center'],history:['AUDIT LEDGER','Decision history'],assistant:['INTELLIGENCE ASSISTANT','AI Intelligence Assistant']}[page];
+    const status=L.on?['ok','All systems operational']:L.error?['down','Backend offline']:['wait','Connecting…'];
+    return `<div class="app sx"><aside class="sidebar"><div class="brand"><span class="mark">${I.shield}</span><span>sentinel</span></div>
+      <div class="nav-label">Workspace</div><nav class="nav">${nav.map(([k,ic,l])=>`<button class="${page===k?'active':''}" data-page="${k}" aria-current="${page===k?'page':'false'}">${icon(ic)}<span>${l}</span></button>`).join('')}</nav>
+      <div class="side-bottom"><div class="engine"><span class="status-dot ${L.on?'':'off'}"></span><span>Processing engine<br/><b>${L.on?'Operational':'Unavailable'}</b></span></div>
+      <div class="profile"><span class="avatar">PG</span><span><b>Paco Gonzalez</b><small>Senior analyst</small></span></div></div></aside>
+      <main class="main"><header class="topbar"><div class="tb-title"><div class="eyebrow">TARVIA SOC / ${titles[0]}</div><h1>${titles[1]}</h1></div>
+      <div class="top-actions"><span class="env pill-btn"><span class="status-dot"></span>${L.on?`${E((L.mode||'').toUpperCase())}: Database mirror`:'DEMO: Offline data'} ${I.down}</span>
+      <span class="sys ${status[0]}"><span class="status-dot ${status[0]==='ok'?'':'off'}"></span>${status[1]}</span><span class="tb-sep"></span>
+      <button class="notify" data-page="ops" aria-label="${num(s.awaiting_decision)} alerts awaiting approval">${I.bell}${s.awaiting_decision?`<i class="badge">${s.awaiting_decision>99?'99+':s.awaiting_decision}</i>`:''}</button><span class="tb-sep"></span>
+      <span class="clock">${I.cal}<span id="sentinel-clock">${clock()}</span></span></div></header>${content}</main></div>`;
+  };
+
+  ops=function(){
+    return `<div class="workspace"><section class="hello"><span class="hello-ic">${I.check}</span><div><h2>${greeting()}, Paco</h2><p>Here’s the current state of your alert ecosystem.</p></div>
+      <div class="refresh"><span class="status-dot ${L.on?'':'off'}"></span><span id="sentinel-updated">${ago()}</span><button class="icon-btn" data-refresh aria-label="Refresh">${I.refresh}</button></div></section>
+      <div class="grid">${approval()}${analytics()}${monitor()}</div></div>`;
+  };
+
+  /* ----------------------------------------------------------------------------------------- approval queue */
+  ticket=function(a){
+    const sev=a.priority.toLowerCase();
+    return `<article class="ticket sev-${sev}" data-alert="${E(a.id)}" tabindex="0"><div class="ticket-top"><span class="prio ${sev}"><i></i>${PRIORITY[a.priority]}</span><span class="mono">${E(a.id)}</span></div>
+      <h4>${E(a.title)}</h4><div class="question"><span>${E(a.question)}</span>${I.right}</div>
+      <div class="ticket-meta"><span>${E(a.category)}</span><span>${E(a.source)}</span><span>${E(a.verdict||'')}</span><span>${a.escalate?'Escalation proposed':a.approvalNeeded?'Approval required':'Pending review'}</span></div>
+      <div class="ticket-bottom"><span class="risk"><b class="r-${sev}">Risk ${a.risk}/100</b> · ${E(a.trigger)}</span><span class="conf" title="Model confidence">${a.confidence}%</span></div></article>`;
+  };
+  approval=function(){
+    const list=getApprovalList(),pages=Math.max(1,Math.ceil(list.length/QUEUE_PAGE_SIZE));
+    state.queuePage=Math.min(state.queuePage,pages);
+    const start=(state.queuePage-1)*QUEUE_PAGE_SIZE,visible=list.slice(start,start+QUEUE_PAGE_SIZE);
+    const win=[...new Set([1,state.queuePage-1,state.queuePage,state.queuePage+1,pages])].filter(p=>p>=1&&p<=pages).sort((a,b)=>a-b);
+    const body=!L.on&&L.error?offline('Live queue unavailable · showing demo data'):'';
+    return `<section class="panel queue">${head(I.shield,'green','Operator approval queue','',`<span class="count">${num(list.length)} pending</span>`,'approval')}
+      <div class="panel-tools"><label class="search">${I.search}<input id="queue-search" placeholder="Search alerts..." value="${E(state.filter)}"/></label>
+      <label class="select"><select id="queue-severity"><option>All priorities</option>${['Critical','High','Medium','Low'].map(x=>`<option value="${x}" ${state.severity===x?'selected':''}>${PRIORITY[x]} · ${x}</option>`).join('')}</select>${I.down}</label>
+      <div class="priority-note">${['Critical','High','Medium','Low'].map(x=>`<span class="prio-chip ${x.toLowerCase()}"><i></i>${PRIORITY[x]}</span>`).join('')}</div></div>
+      <div class="panel-body">${body}${visible.length?visible.map(ticket).join(''):`<div class="empty">${L.on&&!state.filter&&state.severity==='All'?'The queue is clear: no ticket awaits approval.<br/>Run a triage batch from the Processing monitor.':'No alerts match these filters.'}</div>`}</div>
+      <footer class="queue-footer"><span>Showing ${list.length?start+1:0}–${start+visible.length} of ${num(list.length)}</span><span class="queue-pagination"><button data-queue-page="${state.queuePage-1}" ${state.queuePage===1?'disabled':''}>Previous</button>${win.map((p,i)=>`${i&&p-win[i-1]>1?'<span class="gap">…</span>':''}<button data-queue-page="${p}" class="${state.queuePage===p?'current':''}">${p}</button>`).join('')}<button data-queue-page="${state.queuePage+1}" ${state.queuePage===pages?'disabled':''}>Next</button></span></footer></section>`;
+  };
+
+  /* ----------------------------------------------------------------------------------------- analytics */
+  function lineChart(received,triaged){
+    const days=Object.keys(received).sort(),W=300,H=110,max=Math.max(1,...days.map(d=>received[d]||0));
+    if(days.length<2)return '<div class="empty small">Not enough data for a trend yet.</div>';
+    const x=i=>(i*W/(days.length-1)).toFixed(1),y=v=>(H-6-(H-14)*(v||0)/max).toFixed(1);
+    const line=src=>days.map((d,i)=>`${x(i)},${y(src[d])}`).join(' ');
+    const area=`0,${H} ${line(triaged)} ${W},${H}`;
+    const grid=[0.25,0.5,0.75].map(f=>`<line x1="0" x2="${W}" y1="${(H*f).toFixed(1)}" y2="${(H*f).toFixed(1)}"/>`).join('');
+    return `<svg class="lc" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Alerts received and triaged per day"><defs><linearGradient id="lcg" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#2b7de9" stop-opacity=".22"/><stop offset="1" stop-color="#2b7de9" stop-opacity="0"/></linearGradient></defs><g class="lc-grid">${grid}</g><polygon points="${area}" fill="url(#lcg)"/><polyline points="${line(received)}" class="lc-a"/><polyline points="${line(triaged)}" class="lc-b"/></svg><div class="lc-axis"><span>${days[0].slice(5)}</span><span>${days[days.length-1].slice(5)}</span></div>`;
+  }
+  function donut(counts){
+    const keys=['critical','high','medium','low','informational'],tot=keys.reduce((s,k)=>s+(counts[k]||0),0);
+    if(!tot)return '<div class="empty small">No tickets yet.</div>';
+    let acc=0;const stops=keys.filter(k=>counts[k]).map(k=>{const a=acc;acc+=360*counts[k]/tot;return `${SEVCLR[k]} ${a.toFixed(1)}deg ${acc.toFixed(1)}deg`}).join(',');
+    return `<div class="donut-wrap"><div class="donut" style="background:conic-gradient(${stops})"><span><b>${num(tot)}</b><small>tickets</small></span></div><div class="donut-legend">${keys.filter(k=>counts[k]).map(k=>`<span><i style="background:${SEVCLR[k]}"></i><b style="color:${SEVCLR[k]}">${pct(counts[k],tot)}%</b> ${k[0].toUpperCase()+k.slice(1)} <small>${num(counts[k])}</small></span>`).join('')}</div></div>`;
+  }
+  analytics=function(){
+    if(!L.on)return `<section class="panel">${head(I.trend,'blue','Real-time analytics','Triage pipeline','','analytics')}<div class="panel-body">${offline('Analytics unavailable')}</div></section>`;
+    const s=L.stats,tactics=Object.entries(s.alerts_by_tactic||{}),tmax=Math.max(1,...tactics.map(t=>t[1]));
+    const kpi=(l,v,d,tone)=>`<div class="kpi ${tone||''}"><span class="kpi-label">${l}</span><span class="kpi-val">${v}</span>${d!=null?`<span class="delta">${d}</span>`:''}</div>`;
+    return `<section class="panel">${head(I.trend,'blue','Real-time analytics',`Operational data · ${num(s.alerts_total)} alerts in scope`,'','analytics')}<div class="panel-body">
+      <div class="kpis">${kpi('Alerts received',num(s.alerts_total))}${kpi('Triaged',num(s.alerts_triaged),`${pct(s.alerts_triaged,s.alerts_total)}%`)}${kpi('Awaiting approval',num(s.awaiting_decision),null,'warn')}${kpi('Auto-resolved',num(s.auto_resolved),`${pct(s.auto_resolved,s.alerts_triaged)}% of triaged`,'good')}
+      ${state.expanded==='analytics'?`${kpi('Escalated',num(s.escalated),null,'bad')}${kpi('Needs more info',num((s.by_verdict||{}).needs_more_info))}${kpi('Avg. LLM triage',`${s.avg_triage_seconds||0}s`)}${kpi('Pending triage',num(s.alerts_pending_triage))}`:''}</div>
+      <div class="chart-card"><div class="chart-title">Alert volume <span>Daily · UTC</span></div>${lineChart(s.alerts_by_day||{},s.triaged_by_day||{})}<div class="legend"><span><i class="g"></i>Received</span><span><i class="b"></i>Triaged</span></div></div>
+      <div class="chart-card"><div class="chart-title">Alert distribution <span>By final ticket severity</span></div>${donut(s.by_severity||{})}</div>
+      <div class="chart-card"><div class="chart-title">Alerts by tactic <span>MITRE ATT&amp;CK</span></div><div class="bars">${tactics.map(([x,n])=>`<div class="bar-row"><span>${E(x)}</span><div class="bar-track"><div class="bar-fill" style="width:${(100*n/tmax).toFixed(1)}%"></div></div><b>${num(n)}</b></div>`).join('')}</div></div></div></section>`;
+  };
+
+  /* ----------------------------------------------------------------------------------------- monitor */
+  monitor=function(){
+    if(!L.on)return `<section class="panel">${head(I.cog,'green','Processing monitor','Automated pipeline monitoring','','monitor')}<div class="panel-body">${offline('Pipeline monitor unavailable')}</div></section>`;
+    const s=L.stats,sel=s.selection||{},b=L.batch,running=b&&b.status==='running',route=s.by_route||{},lv=s.live||{},liveOn=!!lv.enabled;
+    const decided=Object.entries(s.by_decision||{}).filter(([k])=>k!=='pending').reduce((t,[,n])=>t+n,0);
+    const stages=[['Ingested',s.alerts_total,'Alerts stored from the SOC API'],['Enriched',s.embeddings,'Views, context and embeddings'],['Filtered',(sel.kept||0)+(sel.N4||0),'Logs kept or explained (N0–N4)'],['Rules',route.discriminator||0,'Auto-closed by the discriminator'],['AI LLM',route.llm||0,'Tickets produced by the LLM'],['Valid',(s.alerts_triaged||0)-(s.invalid_tickets||0),'Schema + policy valid tickets'],['Decided',decided,'Operator decisions']];
+    const activeIdx=running||(liveOn&&!lv.queue_exhausted&&!lv.last_error)?(liveOn&&!running?0:4):-1;
+    const status=running?`Triaging batch · ${b.done||0}/${b.total||0} alerts (discriminator → LLM → validation)`
+      :liveOn?(lv.last_error?`Live sync error · ${lv.last_error}`:lv.queue_exhausted?`Live · SOC API queue drained · ${num(lv.ingested)} alerts ingested`:`Live · ${num(lv.ingested)} alerts ingested from the SOC API · ${lv.batch} every ${lv.interval}s`)
+      :s.alerts_pending_triage?`Idle · ${num(s.alerts_pending_triage)} alerts pending triage`:'All alerts triaged';
+    const tag=h=>h.type==='Rule Engine'?['Discriminator','t-green']:h.ticket&&h.ticket.route==='llm'?['Operator · LLM ticket','t-blue']:['Operator','t-blue'];
+    return `<section class="panel">${head(I.cog,'green','Processing monitor','Automated pipeline monitoring',`<span class="live ${liveOn?(lv.last_error?'err':''):'idle'}" title="${E(lv.last_error||'')}"><span class="status-dot ${liveOn&&!lv.last_error?'':'off'}"></span>${liveOn?(lv.last_error?'Sync error':'Live sync'):'On demand'}</span>`,'monitor')}<div class="panel-body">
+      <ol class="stepper">${stages.map(([l,n],i)=>`<li class="${i===activeIdx?'active':n>0?'done':''}" title="${stages[i][2]}: ${num(n)}"><span class="dot">${n>0&&i!==activeIdx?I.check:''}</span><b>${l}</b><small>${num(n)}</small></li>`).join('')}</ol>
+      <div class="current"><b>Current status:</b> ${E(status)}${running?`<div class="progress"><span style="width:${b.total?100*(b.done||0)/b.total:0}%"></span></div>`:''}</div>
+      <div class="batch"><button class="action primary" data-batch="20" ${running?'disabled':''}>${I.play}Triage next 20</button><button class="action outline" data-batch="100" ${running?'disabled':''}>Next 100</button><span class="mono">${num(s.alerts_pending_triage)} pending · mode ${E(L.mode)}</span></div>
+      <div class="log-head"><h4>Automated action log</h4><span class="mono">Newest first</span></div>
+      <ul class="timeline">${(liveOn&&(lv.recent||[]).length?lv.recent.slice(0,8).map(r=>`<li><span class="t-time">${E(L.fmt(r.at).split('·').pop().trim())}</span><div><b>${E(r.alert_id)}</b> · ingested → ${E(L.VERDICT[r.verdict]||r.verdict||'—')} · ${E(r.severity||'')}<br/><span class="tag ${r.route==='discriminator'?'t-green':'t-blue'}">${r.route==='discriminator'?'Discriminator':'AI LLM'}</span> <span class="tag t-grey">SOC API</span></div></li>`)
+        :history.slice(0,7).map(h=>{const [t,c]=tag(h);return `<li><span class="t-time">${E((h.time.split('·')[1]||'').trim())}</span><div><b>${E(h.alert)}</b> · ${E(h.action)}<br/><span class="tag ${c}">${t}</span></div></li>`})).join('')||'<li class="empty small">No automated actions yet.</li>'}</ul></div></section>`;
+  };
+
+  /* ----------------------------------------------------------------------------------------- investigation */
+  const list=(items,empty)=>items&&items.length?items.map(x=>`<li>${x}</li>`).join(''):`<li class="muted">${empty}</li>`;
+  investigation=function(a){
+    const t=a.ticket;
+    if(!t)return `<div class="investigation-backdrop" data-close-investigation><aside class="investigation"><div class="investigation-head"><div><span class="mono">DEMO DATA · ${E(a.id)}</span><h2>${E(a.title)}</h2></div><button class="close" data-close-investigation>×</button></div><div class="investigation-body">${offline('Ticket detail requires the backend')}</div></aside></div>`;
+    const k=t.ticket||{},d=a.detail,sev=(k.severity||'low');
+    const ev=(k.evidence||[]).map(e=>`<span class="mono">${E(e.event_id)}</span> · ${E(e.source)} — ${E(e.finding)}`);
+    const acts=(k.recommended_actions||[]).map(x=>`<b>${E(x.action)}</b> → ${E(x.target)} ${x.requires_approval?'<span class="tag t-red">Requires approval</span>':''}${x.justification?`<br/><small>${E(x.justification)}</small>`:''}`);
+    const sel=d?(d.selection||[]).map(s=>`<span class="mono">${E(s.event_id)}</span> · ${E(s.source)} · <span class="tag ${s.state==='kept'||s.state==='unfiltered'?'t-blue':'t-grey'}">${E(s.state)}</span>${s.reference?` ${E(s.reference)}`:''}`):null;
+    const steps=d?(d.transcript||[]).filter(x=>x.type==='contexto'||x.type==='discriminador').map(x=>x.type==='discriminador'?`<b>Discriminator</b> ${E(x.output)}`:`<b>${E(x.comprobacion||'')}</b> ${E(x.motivo)} <small class="mono">${E((x.consultas||[]).map(q=>q.consulta).join(', '))}</small>`):null;
+    const aff=k.affected||{};
+    const ents=[...(aff.hosts||[]).map(x=>['Host',x]),...(aff.business_services||[]).map(x=>['Service',x]),...(aff.users||[]).map(x=>['User',x]),...(aff.customers||[]).map(x=>['Customer',x])];
+    return `<div class="investigation-backdrop" data-close-investigation><aside class="investigation" role="dialog" aria-label="Investigation ${E(a.id)}"><div class="investigation-head"><div><span class="mono">INVESTIGATION WORKSPACE · ${E(a.id)} · ${E(t.rule_id)}</span><h2>${E(k.title||a.title)}</h2>
+      <div class="investigation-tags"><span class="prio ${a.priority.toLowerCase()}"><i></i>${E(sev)}</span><span class="tag t-blue">${E(L.VERDICT[k.verdict]||k.verdict)}</span><span class="tag ${t.valid?'t-green':'t-red'}">${t.valid?'Schema + policy valid':'Invalid: '+E((t.errors||[]).join('; '))}</span>${k.escalation&&k.escalation.escalate?'<span class="tag t-orange">Escalation proposed</span>':''}</div></div><button class="close" data-close-investigation aria-label="Close">×</button></div>
+      <div class="investigation-body">
+      <section class="investigation-section"><h3>Summary</h3><p class="lead">${E(k.summary)}</p><div class="detail-grid"><div><small>Alert created</small><span class="mono">${E(a.detected)}</span></div><div><small>Rule</small>${E(t.rule_id)} · ${E(t.rule_name)}</div><div><small>Source product</small>${E(t.source_product)}</div><div><small>Runbook</small>${E(t.runbook_id)}</div><div><small>Confidence</small><b>${a.confidence}%</b></div><div><small>Model · attempts</small>${E(t.model)} · ${E(t.attempts)}</div></div></section>
+      <section class="investigation-section"><h3>Severity</h3><p>${E(k.severity_rationale||'—')}</p><div class="detail-grid"><div><small>Rule severity</small>${E(t.rule_severity)}</div><div><small>Final severity</small><b class="r-${a.priority.toLowerCase()}">${E(sev)}</b></div></div></section>
+      <section class="investigation-section"><h3>Evidence</h3><ul class="ticket-list">${list(ev,'No evidence cited')}</ul></section>
+      <section class="investigation-section"><h3>Affected</h3><div class="systems">${ents.map(([kind,x])=>`<div class="system"><span class="system-dot"></span><div><b>${E(x)}</b><small>${kind}</small></div></div>`).join('')||'<div class="empty small">No affected entities resolved.</div>'}</div></section>
+      <section class="investigation-section"><h3>Log selection <small>${E(t.informative_logs)}/${E(t.cited_logs)} informative</small></h3><ul class="ticket-list">${sel?list(sel,'No cited logs'):'<li class="muted">Loading…</li>'}</ul></section>
+      <section class="investigation-section"><h3>Pipeline trace</h3><ul class="ticket-list">${steps?list(steps,'Decided with the prompt context, no extra queries'):'<li class="muted">Loading…</li>'}</ul></section>
+      ${(k.open_questions||[]).length?`<section class="investigation-section"><h3>Open questions</h3><ul class="ticket-list">${list((k.open_questions||[]).map(E),'')}</ul></section>`:''}
+      <section class="investigation-section recommendation"><h3>Recommended actions</h3><ul class="ticket-list">${list(acts,'No action proposed')}</ul>${k.escalation&&k.escalation.escalate?`<p><b>Escalation</b> → ${E(k.escalation.to)}: ${E(k.escalation.reason)}</p>`:''}<p class="policy-note">The AI only proposes: no action has been executed.</p></section>
+      </div><div class="investigation-footer"><textarea id="decision-comment" placeholder="Optional justification for your decision..."></textarea><div class="decision-actions"><button class="action secondary" data-investigation-action="investigate">Request more information</button><button class="action outline" data-investigation-action="escalate">Escalate</button><button class="action danger" data-investigation-action="reject">Reject</button><button class="action primary" data-investigation-action="approve">Approve</button></div></div></aside></div>`;
+  };
+
+  /* ----------------------------------------------------------------------------------------- decision ledger */
+  const MAKERS={'Operator':'Human','Discriminator':'Rule Engine'};
+  getHistoryRows=function(){
+    const q=(state.filter||'').trim().toLowerCase(),type=MAKERS[state.historyMaker];
+    return history.filter(x=>(!q||`${x.id} ${x.alert} ${x.maker} ${x.category} ${x.severity} ${x.action} ${x.outcome} ${x.time}`.toLowerCase().includes(q))&&(!type||x.type===type)&&(state.historySeverity==='All'||x.severity===state.historySeverity)&&(state.historyOutcome==='All'||x.outcome===state.historyOutcome));
+  };
+  historyPage=function(){
+    const rows=getHistoryRows(),sel=(id,all,opts,cur)=>`<label class="select"><select id="${id}"><option>${all}</option>${opts.map(o=>`<option ${cur===o?'selected':''}>${o}</option>`).join('')}</select>${I.down}</label>`;
+    return `<div class="history-page"><section class="hello slim"><span class="hello-ic">${I.history}</span><div><h2>Decision ledger</h2><p>Every automated and human decision, from detection to the operator's verdict.</p></div><div class="refresh">${num(history.length)} records${L.on?'':' · demo data'}</div></section>
+      <div class="filters"><label class="search">${I.search}<input id="history-search" placeholder="Search decision ID, alert ID, category..." value="${E(state.filter)}"/></label>${sel('history-maker','All decision makers',Object.keys(MAKERS),state.historyMaker)}${sel('history-severity','All severities',['Critical','High','Medium','Low'],state.historySeverity)}${sel('history-outcome','All outcomes',['Confirmed','Overridden'],state.historyOutcome)}<button class="action outline" id="history-export" type="button">Export CSV ↓</button></div>
+      <div class="table-wrap"><table class="table"><thead><tr><th>Timestamp</th><th>Alert ID</th><th>Category</th><th>Severity</th><th>Decision maker</th><th>Action taken</th><th>Outcome</th><th>Risk</th><th>Confidence</th></tr></thead><tbody>${rows.map(x=>`<tr data-decision="${E(x.id)}" tabindex="0"><td class="mono">${E(x.time)}</td><td class="mono">${E(x.alert)}</td><td>${E(x.category)}</td><td><span class="prio ${x.severity.toLowerCase()}"><i></i>${E(x.severity)}</span></td><td>${E(x.maker)}</td><td>${E(x.action)}</td><td><span class="tag ${x.outcome==='Confirmed'?'t-green':'t-orange'}">${E(x.outcome)}</span></td><td><b>${x.risk}</b></td><td>${x.confidence}%</td></tr>`).join('')}</tbody></table>${rows.length?'':'<div class="empty">No decision records match your search.</div>'}</div></div>`;
+  };
+  drawer=function(){
+    if(!state.selected)return '';
+    const x=history.find(h=>h.id===state.selected);if(!x)return '';
+    const t=x.ticket||{},k=t.ticket||{};
+    return `<div class="drawer-backdrop" data-close><aside class="drawer" role="dialog"><div class="drawer-head"><div><span class="mono">${E(x.id)} · AUDIT INSPECTOR</span><h2>${E(x.alert)}</h2><span class="tag t-green">${E(x.status)}</span></div><button class="close" data-close aria-label="Close">×</button></div>
+      <div class="detail-section"><h4>Ticket</h4><p>${E(k.title||'')}<br/><span class="muted">${E(k.summary||'')}</span></p><div class="detail-grid"><div><small>Verdict</small>${E(L.VERDICT[k.verdict]||k.verdict||'—')}</div><div><small>Severity</small>${E(k.severity||x.severity)}</div><div><small>Confidence</small>${x.confidence}%</div><div><small>Route</small>${t.route==='discriminator'?'Discriminator (no LLM)':'LLM · '+E(t.model||'')}</div></div></div>
+      <div class="detail-section"><h4>Decision</h4><div class="detail-grid"><div><small>Decision maker</small>${E(x.maker)}</div><div><small>Action</small>${E(x.action)}</div><div><small>Comment</small>${E(t.decision_comment||'—')}</div><div><small>Time</small><span class="mono">${E(x.time)}</span></div></div></div>
+      <div class="detail-section"><h4>Evidence</h4><ul class="ticket-list">${list((k.evidence||[]).map(e=>`<span class="mono">${E(e.event_id||'')}</span> ${E(e.finding||'')}`),'—')}</ul></div></aside></div>`;
+  };
+
+  /* ----------------------------------------------------------------------------------------- interactions */
+  document.addEventListener('click',e=>{
+    const t=e.target.closest('[data-alert]');if(t){const a=state.alerts.find(x=>x.id===t.dataset.alert);if(a)setTimeout(()=>L.detail(a),0)}
+    const c=e.target.closest('[data-chat-alert]');if(c){const a=state.alerts.find(x=>x.id===c.dataset.chatAlert);if(a)setTimeout(()=>L.detail(a),0)}
+    const b=e.target.closest('[data-batch]');if(b&&!b.disabled)L.runBatch(Number(b.dataset.batch));
+    if(e.target.closest('[data-refresh]'))L.load();
+  });
+  document.addEventListener('keydown',e=>{
+    if(e.key==='Escape'&&(state.selectedAlert||state.selected)){state.selectedAlert=null;state.selected=null;render();return}
+    if(e.key==='Enter'){const el=e.target.closest&&e.target.closest('[data-alert],[data-decision]');if(el)el.click()}
+  });
+  setInterval(()=>{const c=document.getElementById('sentinel-clock');if(c)c.textContent=clock();const u=document.getElementById('sentinel-updated');if(u)u.textContent=ago()},1000);
+  render();
+  L.load();
+})();

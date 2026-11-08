@@ -229,6 +229,17 @@ class PromptBuilder:
             "cited_count": str(len(ctx.informative_logs) + sum(len(v) for v in ctx.set_aside.values())),
         }
 
+    def _similar(self, ctx: AlertContext) -> dict[str, str]:
+        """Resolved neighbours in the embedding space: a consistency reference, never evidence for this alert."""
+        if not ctx.similar_alerts:
+            return {"similar_alerts": ""}
+        items = [
+            f"{s['alert_id']} {s['rule_id']} → {s['verdict']}/{s['severity']} (sim {s['similarity']:.2f})"
+            for s in ctx.similar_alerts
+        ]
+        return {"similar_alerts": "Alertas similares ya resueltas (referencia de coherencia, no evidencia): "
+                + "; ".join(items) + "\n"}  # fmt: skip
+
     # ------------------------------------------------------------ public API
     def build(self, alert_id: str) -> PromptPackage:
         """Prompt package for one alert."""
@@ -242,10 +253,11 @@ class PromptBuilder:
             "tactic": ctx.tactic, "runbook_id": ctx.runbook_id, "description": _untrusted(ctx.description),
             "evidence": _untrusted(ctx.evidence), "identifiers": self._identifiers(bindings),
             "affected": self._affected(ctx),
-        } | severity | self._runbook(ctx, prof) | self._logs(ctx)  # fmt: skip
+        } | severity | self._runbook(ctx, prof) | self._logs(ctx) | self._similar(ctx)  # fmt: skip
         user = Template(self.cfg.user_template).substitute(values)
         meta = {"rule_id": ctx.rule_id, "informative_logs": len(ctx.informative_logs),
                 "set_aside": {k: len(v) for k, v in ctx.set_aside.items()}, "base_severity": severity["base_severity"],
+                "similar_alerts": ctx.similar_alerts,
                 "chars": {"system": len(self.system), "user": len(user)}}  # fmt: skip
         return PromptPackage(
             ctx.alert_id, ctx.runbook_id, self.system, user, self.output_schema, tool_definition(names),
